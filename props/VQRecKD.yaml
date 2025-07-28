@@ -1,0 +1,30 @@
+n_layers: 2
+n_heads: 4
+inner_size: 256
+hidden_dropout_prob: 0.5
+attn_dropout_prob: 0.5
+hidden_act: 'gelu'
+layer_norm_eps: 1e-12
+initializer_range: 0.02
+regularization_loss_weight: 1
+loss_type: 'CE'
+#如果要换数据集（不同的两个域），要改code_dim和index_suffix
+code_dim: 48 #oa48， op32😁
+code_cap: 256
+hidden_size: 300
+temperature: 0.07
+train_stage: inductive_ft # pretrain / inductiZve_ft
+
+index_path: dataset/downstream
+index_pretrain_dataset: ~
+# index_suffix: OPQ32,IVF1,PQ32x8.strict.index #oa48 op32😁
+index_suffix: OPQ48,IVF1,PQ48x8.strict.index 
+
+plm_suffix: feat1CLS
+plm_size: 768
+sinkhorn_iter: 3
+reassign_steps: 5
+eval_batch_size: 1024
+
+
+

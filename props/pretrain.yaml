@@ -1,0 +1,20 @@
+data_path: 'dataset/office-arts/' #😁
+
+benchmark_filename: [train, valid, test]
+alias_of_item_id: [item_id_list]
+load_col:
+  inter: [user_id, item_id_list, item_id]
+neg_sampling: ~
+#切换数据集，要改data_path、index_path、index_pretrain_dataset、checkpoint_dir
+train_stage: pretrain
+pretrain_epochs: 10
+save_step: 10
+train_batch_size: 1024
+
+index_path: dataset/office-arts/ #😁
+index_pretrain_dataset: OA #😁
+filter_id_suffix: filtered_id
+gpu_id: 2
+checkpoint_dir : 'save_OA/' #😁
+epsilon: 0.3
+num_bits: 8   
