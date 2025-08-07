@@ -396,11 +396,11 @@ class FedtrainTrainer(Trainer):
             if (epoch_idx + 1) % self.save_step == 0:
                 saved_model_file_A = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}-kdw{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()), self.model_A.regularization_loss_weight)
+                    '{}-{}-{}-{}-kdw{}{}-kdw{}{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()),self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight)
                 )
                 saved_model_file_B = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}-kdw{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()), self.model_B.regularization_loss_weight)
+                    '{}-{}-{}-{}-kdw{}{}-kdw{}{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()), self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight)
                 )
                 self.save_pretrained_model_A(epoch_idx, saved_model_file_A)
                 self.save_pretrained_model_B(epoch_idx, saved_model_file_B)

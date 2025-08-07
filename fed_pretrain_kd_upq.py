@@ -5,16 +5,64 @@ from logging import getLogger
 from recbole.config import Config
 from recbole.data.dataloader import TrainDataLoader
 from recbole.utils import init_seed, init_logger
-from FLtrainer.fedtrainer_ldp_kd import FedtrainTrainer
+from FLtrainer.fedtrainer_ldp_kd_upq import FedtrainTrainer
 from model.vqrec import VQRec
 from model.vqrecKD import VQRecKD
-from data.dataset import FederatedDataset
+from model.vqrecKDUPQ import VQRecKDUPQ
+from data.dataset import FederatedPlusDataset
 import os
 import faiss
 # import numpy as np
 import torch
 
 from utils import parse_faiss_index
+
+#user的不需要pad
+def load_index_user(config, logger, user_num, field2id_token_user):
+    code_dim = config['code_dim']
+    code_cap = config['code_cap']
+    dataset_name = config['dataset']
+    index_suffix = config['index_suffix']
+    if config['index_pretrain_dataset'] is not None:
+        index_dataset = config['index_pretrain_dataset']
+    else:
+        index_dataset = config['dataset']
+    index_path = os.path.join(
+        config['index_path'],
+        index_dataset,
+        f'{index_dataset}_user.{index_suffix}'
+    )
+    logger.info(f'Index path: {index_path}')
+    uni_index = faiss.read_index(index_path)
+    pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
+    assert code_dim == pq_codes_user.shape[1], pq_codes_user.shape
+    # assert user_num == 1 + pq_codes.shape[0], f'{user_num}, {pq_codes.shape}'
+    # uint8 -> int32 to reserve 0 padding
+    pq_codes_user = pq_codes_user.astype(np.int32)
+    
+    # flatten pq codes
+    base_id = 0
+    for i in range(code_dim):
+        pq_codes_user[:, i] += base_id
+        base_id += code_cap
+
+    logger.info('Loading filtered index mapping.')
+    filter_id_dct = {}
+    with open(
+            os.path.join(config['data_path'],
+                         f'{dataset_name}.{config["filter_id_suffix_user"]}'),
+            'r', encoding='utf-8') as file:
+        for idx, line in enumerate(file):
+            filter_id_name = line.strip()
+            filter_id_dct[filter_id_name] = idx
+
+    logger.info('Converting indexes.')
+    mapped_codes = np.zeros((user_num, code_dim), dtype=np.int32)
+    #item情况下，mapped_codes[0]是padding的0, user情况下，mapped_codes[0]是0-0对应的pq_code
+    for i, token in enumerate(field2id_token_user):
+        mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
+    
+    return torch.LongTensor(mapped_codes)
 
 def load_index(config, logger, item_num, field2id_token):
     code_dim = config['code_dim']
@@ -45,6 +93,7 @@ def load_index(config, logger, item_num, field2id_token):
         pq_codes[:, i] += base_id
         base_id += code_cap + 1
 
+
     logger.info('Loading filtered index mapping.')
     filter_id_dct = {}
     with open(
@@ -70,16 +119,16 @@ def change_dict(dict, point):
 
 def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B, **kwargs):
     # configurations initialization
-    props = ['props/VQRecKD.yaml', 'props/pretrain.yaml']
+    props = ['props/VQRecKDUPQ.yaml', 'props/pretrain.yaml']
     print(props)
 
     kwargs['regularization_loss_weight'] = regularization_loss_weight_A
 
     # configurations initialization
-    config = Config(model=VQRecKD, dataset=dataset, config_file_list=props, config_dict=kwargs)
-    config_A = Config(model=VQRecKD, dataset='O', config_file_list=props, config_dict=kwargs)
+    config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
+    config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs)
     kwargs['regularization_loss_weight'] = regularization_loss_weight_B
-    config_B = Config(model=VQRecKD, dataset='A', config_file_list=props, config_dict=kwargs)
+    config_B = Config(model=VQRecKDUPQ, dataset='A', config_file_list=props, config_dict=kwargs)
     init_seed(config['seed'], config['reproducibility'])
     init_seed(config_A['seed'], config['reproducibility'])
     init_seed(config_B['seed'], config['reproducibility'])
@@ -93,46 +142,68 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     logger.info(config_B)
     logger.info(dataset)
 
-    dataset_A = FederatedDataset(config_A, pq_codes=None)
+    dataset_A = FederatedPlusDataset(config_A, pq_codes=None)
     logger.info(dataset_A)
     #这个是得到训练集，按照Recbole默认的config中的eval_setting设置
     #有个问题，默认的eval_setting是随机顺序、按比例切分、全量排名
     pretrain_dataset_A = dataset_A.build()[0]
     #三部分：1.得到所有(raw_id, token_id)的元组。2.列表化并取最后一个元素。3.取第二个元素，即token_id
     spilt_point = list(dataset_A.field2token_id['item_id'].items())[-1][1]
-    dataset_B = FederatedDataset(config_B, pq_codes=None)
+    spilt_point_user = list(dataset_A.field2token_id['user_id'].items())[-1][1]
+    dataset_B = FederatedPlusDataset(config_B, pq_codes=None)
 
     logger.info(dataset_B)
     pretrain_dataset_B = dataset_B.build()[0]
     item_num = dataset_A.item_num + dataset_B.item_num - 1
+    user_num = dataset_A.user_num + dataset_B.user_num - 2
+    field2id_token_user = np.concatenate((dataset_A.field2id_token['user_id'][1:], dataset_B.field2id_token['user_id'][1:]))
     field2id_token = np.concatenate((dataset_A.field2id_token['item_id'], dataset_B.field2id_token['item_id'][1:]))
     #这里得到了两个数据集合并的原始item_id列表field2id_token
+    #pq_codes_user = load_index_user(config, logger, user_num, field2id_token_user)
+    pq_codes_user = load_index_user(config, logger, user_num, field2id_token_user).to(config['device'])
     pq_codes = load_index(config, logger, item_num, field2id_token).to(config['device'])
     item_pq_A = pq_codes[:spilt_point + 1]
     item_pq_B = torch.cat([pq_codes[0].unsqueeze(0), pq_codes[spilt_point + 1:]], dim=0)
+    user_pq_A = pq_codes_user[:spilt_point_user]
+    user_pq_B = pq_codes_user[spilt_point_user:]
+    
     pretrain_dataset_A.pq_codes = item_pq_A
     pretrain_dataset_B.pq_codes = item_pq_B
+    pretrain_dataset_A.pq_codes_user = user_pq_A
+    pretrain_dataset_B.pq_codes_user = user_pq_B
     pretrain_data_A = TrainDataLoader(config_A, pretrain_dataset_A, None, shuffle=True)
     pretrain_data_B = TrainDataLoader(config_A, pretrain_dataset_B, None, shuffle=True)
 
-    model_A = VQRecKD(config_A, pretrain_data_A.dataset).to(config['device'])
+    model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
     model_A.pq_codes.to(config['device'])
+    model_A.pq_codes_user.to(config['device'])
     logger.info(model_A)
-    model_B = VQRecKD(config_B, pretrain_data_B.dataset).to(config['device'])
+    model_B = VQRecKDUPQ(config_B, pretrain_data_B.dataset).to(config['device'])
     model_B.pq_codes.to(config['device'])
+    model_B.pq_codes_user.to(config['device'])  
     logger.info(model_B)
     global_embedding = nn.Embedding(
         config['code_dim'] * (1 + config['code_cap']), config['hidden_size'], padding_idx=0).to(config['device'])
     global_embedding.weight.data.normal_(mean=0.0, std=config['initializer_range'])
+
+    global_embedding_user = nn.Embedding(
+        config['code_dim'] * (config['code_cap']), config['hidden_size']).to(config['device'])
+    global_embedding_user.weight.data.normal_(mean=0.0, std=config['initializer_range'])
+
     model_A.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
     model_B.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
     model_A.pq_code_embedding_specific.load_state_dict(global_embedding.state_dict())
     model_B.pq_code_embedding_specific.load_state_dict(global_embedding.state_dict())
+
+    model_A.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
+    model_B.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
+    model_A.pq_code_user_embedding_specific.load_state_dict(global_embedding_user.state_dict())
+    model_B.pq_code_user_embedding_specific.load_state_dict(global_embedding_user.state_dict())
     weight = []
     weight.append(dataset_A.file_size_list[0]/(dataset_A.file_size_list[0] + dataset_B.file_size_list[0]))
     weight.append(dataset_B.file_size_list[0]/(dataset_A.file_size_list[0] + dataset_B.file_size_list[0]))
     weight = torch.tensor(weight).to(config['device'])
-    trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding)
+    trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding, global_embedding_user)
     trainer.fedtrain(pretrain_data_A, pretrain_data_B, weight, show_progress=True)
 
     return config['model'], config['dataset']
@@ -141,15 +212,16 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
 if __name__ == '__main__':
     # Update args for each run
     #[0.0001, 0.001, 0.01, 0.1, 0.2, 0.5, 1, 10, 100, 1000]
-    for kdwa in [1000]: 
-        for kdwb in [0.2, 0.5, 1, 10, 100]:
+    # for kdwa in [1000]: 
+    #     for kdwb in [0.2, 0.5, 1, 10, 100]:
             parser = argparse.ArgumentParser()
             parser.add_argument('-d', type=str, default='OA', help='dataset name')
-            parser.add_argument('-regularization_loss_weight_A', type=float, default=kdwa, help='weight for regularization loss A')
-            parser.add_argument('-regularization_loss_weight_B', type=float, default=kdwb, help='weight for regularization loss B')
+            # parser.add_argument('-regularization_loss_weight_A', type=float, default=kdwa, help='weight for regularization loss A')
+            # parser.add_argument('-regularization_loss_weight_B', type=float, default=kdwb, help='weight for regularization loss B')
             args, _ = parser.parse_known_args()
             # Call pretrain with these hyperparameters
-            model, dataset = pretrain(args.d, regularization_loss_weight_A=args.regularization_loss_weight_A, regularization_loss_weight_B=args.regularization_loss_weight_B)
+            # model, dataset = pretrain(args.d, regularization_loss_weight_A=args.regularization_loss_weight_A, regularization_loss_weight_B=args.regularization_loss_weight_B)
+            model, dataset = pretrain(args.d, regularization_loss_weight_A=1, regularization_loss_weight_B=1)
 
 
 

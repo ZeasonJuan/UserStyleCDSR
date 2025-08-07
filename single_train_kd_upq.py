@@ -8,9 +8,10 @@ from recbole.utils import init_seed, init_logger
 # from model.vqrec_attprompt import VQRec
 from model.vqrec import VQRec
 from model.vqrecKD import VQRecKD
+from model.vqrecKDUPQ import VQRecKDUPQ
 # from model.vqrec_tid import VQRec
 # from vqrec import VQRec
-from data.dataset import FederatedDataset
+from data.dataset import FederatedPlusDataset
 from data.dataset import FdsaDataset
 from data.dataset import UniVQRecDataset
 from sklearn.model_selection import ParameterGrid
@@ -20,6 +21,53 @@ import torch
 from recbole.data import data_preparation
 from trainer import VQRecTrainer
 from utils import parse_faiss_index
+
+def load_index_user(config, logger, field2id_token_user, user_num):
+    code_dim = config['code_dim']
+    code_cap = config['code_cap']
+    dataset_name = config['dataset']
+    index_suffix = config['index_suffix']
+    pq_path = config['pq_data']
+    if config['index_pretrain_dataset'] is not None:
+        index_dataset = config['index_pretrain_dataset']
+    else:
+        index_dataset = config['dataset']
+    index_path = os.path.join(
+        config['index_path'],
+        pq_path,
+        f'{pq_path}_user.{index_suffix}'
+    )
+    logger.info(f'Index path: {index_path}')
+    uni_index = faiss.read_index(index_path)
+    pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
+    assert code_dim == pq_codes_user.shape[1], pq_codes_user.shape
+    # assert user_num == 1 + pq_codes.shape[0], f'{user_num}, {pq_codes.shape}'
+    # uint8 -> int32 to reserve 0 padding
+    pq_codes_user = pq_codes_user.astype(np.int32)
+    
+    # flatten pq codes
+    base_id = 0
+    for i in range(code_dim):
+        pq_codes_user[:, i] += base_id
+        base_id += code_cap
+
+    logger.info('Loading filtered index mapping.')
+    filter_id_dct = {}
+    with open(
+            os.path.join(config['data_path'],
+                         f'{dataset_name}.{config["filter_id_suffix_user"]}'),
+            'r', encoding='utf-8') as file:
+        for idx, line in enumerate(file):
+            filter_id_name = line.strip()
+            filter_id_dct[filter_id_name] = idx
+
+    logger.info('Converting indexes.')
+    mapped_codes = np.zeros((user_num, code_dim), dtype=np.int32)
+    #item情况下，mapped_codes[0]是padding的0, user情况下，mapped_codes[0]是0-0对应的pq_code
+    for i, token in enumerate(field2id_token_user):
+        mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
+    
+    return torch.LongTensor(mapped_codes)
 
 def load_index(config, logger, field2id_token, item_num):
     code_dim = config['code_dim']
@@ -79,26 +127,31 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     print(props)
 
     # configurations initialization
-    config = Config(model=VQRecKD, dataset=dataset, config_file_list=props, config_dict=kwargs)
-    config_A = Config(model=VQRecKD, dataset='O', config_file_list=props, config_dict=kwargs) #这里的P要进行设置，是要进行微调的单个数据集的首字母缩写
+    config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
+    config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs) #这里的P要进行设置，是要进行微调的单个数据集的首字母缩写
     init_seed(config['seed'], config['reproducibility'])
     init_seed(config_A['seed'], config['reproducibility'])
     # logger initialization
     init_logger(config_A)
     logger = getLogger()
     logger.info(config_A)
-    dataset = FederatedDataset(config_A, pq_codes=None)
-    dataset_A = FederatedDataset(config_A, pq_codes=None)
+    dataset = FederatedPlusDataset(config_A, pq_codes=None)
+    dataset_A = FederatedPlusDataset(config_A, pq_codes=None)
     logger.info(dataset_A)
     pretrain_dataset_A = dataset_A.build()[0]
+    
     pq_codes = load_index(config, logger, dataset_A.field2id_token['item_id'], dataset_A.item_num).to(config['device'])
+    pq_codes_user = load_index_user(config, logger, dataset_A.field2id_token['user_id'][1:], dataset_A.user_num - 1).to(config['device'])
     pretrain_dataset_A.pq_codes = pq_codes
+    pretrain_dataset_A.pq_codes_user = pq_codes_user
+    dataset.pq_codes_user = pq_codes_user
     dataset.pq_codes = pq_codes
     pretrain_data_A = TrainDataLoader(config_A, pretrain_dataset_A, None, shuffle=True)
     train_data, valid_data, test_data = data_preparation(config_A, dataset)
 
-    model_A = VQRecKD(config_A, pretrain_data_A.dataset).to(config['device'])
+    model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
     model_A.pq_codes.to(config['device'])
+    model_A.pq_codes_user.to(config['device'])
     # model_A.private_codes = model_A.private_codes.to(config['device'])
     if pretrained_file != '':
         checkpoint = torch.load(pretrained_file)
@@ -140,21 +193,22 @@ if __name__ == '__main__':
     
     kdw = [0.0001, 0.001, 0.01, 0.1, 0.2, 0.5, 1, 10, 100, 1000]
     for i in kdw: 
-        for j in kdw: 
-            if i == j:
-                continue
-            parser = argparse.ArgumentParser()
-            parser.add_argument('-m', type=str, default='VQRecKD', help='model name')
-            parser.add_argument('-d', type=str, default='OA', help='dataset name') # 😁
-            # OP 😁
-            # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-P-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
-            # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-O-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
-            # OA 😁
-            # parser.add_argument('-p', type=str, default='save_OA/VQRecKD-A-10-2025-07-10-kdw0.2.pth', help='pre-trained model path')
-            parser.add_argument('-p', type=str, default=f'save_OA/VQRecKD-O-10-2025-07-30-kdwO{i}-kdwA{j}.pth', help='pre-trained model path')
-            parser.add_argument('-f', type=str, default='', help='fine-tune mode')
-            args, unparsed = parser.parse_known_args()
-            print(args)
+        if i in [0.1, 0.2, 0.5, 1]: 
+            date = "10"
+        else:
+            date = "29"
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-m', type=str, default='VQRecKDUPQ', help='model name')
+        parser.add_argument('-d', type=str, default='OA', help='dataset name') # 😁
+        # OP 😁
+        # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-P-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
+        # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-O-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
+        # OA 😁
+        # parser.add_argument('-p', type=str, default='save_OA/VQRecKD-A-10-2025-07-10-kdw0.2.pth', help='pre-trained model path')
+        parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-08-04-iO1-iA1-uO1-uA1.pth', help='pre-trained model path')
+        parser.add_argument('-f', type=str, default='', help='fine-tune mode')
+        args, unparsed = parser.parse_known_args()
+        print(args)
 
-            finetune(args.m, args.d, pretrained_file=args.p)
+        finetune(args.m, args.d, pretrained_file=args.p)
 

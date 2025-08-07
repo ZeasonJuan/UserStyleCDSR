@@ -150,11 +150,12 @@ class Trainer(AbstractTrainer):
             optimizer = optim.Adam(params_B, lr=learning_rate)
         return optimizer
 
-    def _train_epoch_A(self, train_data, epoch_idx, global_embedding, loss_func=None, show_progress=False):
+    def _train_epoch_A(self, train_data, epoch_idx, global_embedding, global_embedding_user, loss_func=None, show_progress=False):
         # for param in self.model_B.parameters():
         #     param.requires_grad=False
         self.model_A.train()
-        embedding_grad_sum = torch.zeros_like(self.model_A.pq_code_embedding.weight)
+        embedding_grad_sum = torch.zeros_like(self.model_A.pq_code_embedding_specific.weight)
+        embedding_user_grad_sum = torch.zeros_like(self.model_A.pq_code_user_embedding_specific.weight)
         loss_func = loss_func or self.model_A.calculate_loss
         total_loss = None
         iter_data = (
@@ -168,7 +169,7 @@ class Trainer(AbstractTrainer):
         for batch_idx, interaction in enumerate(iter_data):
             interaction = interaction.to(self.device)
             self.optimizer_A.zero_grad()
-            losses = self.model_A.calculate_loss(interaction) #+ 0.005 * torch.norm(self.model_A.pq_code_embedding.weight - global_embedding.weight) ** 2
+            losses = self.model_A.calculate_loss(interaction, global_embedding, global_embedding_user) #+ 0.005 * torch.norm(self.model_A.pq_code_embedding.weight - global_embedding.weight) ** 2
             if isinstance(losses, tuple):
                 loss = sum(losses)
                 loss_tuple = tuple(per_loss.item() for per_loss in losses)
@@ -181,14 +182,16 @@ class Trainer(AbstractTrainer):
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model_A.parameters(), **self.clip_grad_norm)
             self.optimizer_A.step()
-            embedding_grad_sum += self.model_A.pq_code_embedding.weight.grad.clone()
+            embedding_grad_sum += self.model_A.pq_code_embedding_specific.weight.grad.clone()
+            embedding_user_grad_sum += self.model_A.pq_code_user_embedding_specific.weight.grad.clone()
             if self.gpu_available and show_progress:
                 iter_data.set_postfix_str(set_color('Loss: ' + str(losses.item()), 'yellow'))
-        return total_loss, embedding_grad_sum
+        return total_loss, embedding_grad_sum, embedding_user_grad_sum  
 
-    def _train_epoch_B(self, train_data, epoch_idx, global_embedding, loss_func=None, show_progress=False):
+    def _train_epoch_B(self, train_data, epoch_idx, global_embedding, global_embedding_user, loss_func=None, show_progress=False):
         self.model_B.train()
-        embedding_grad_sum = torch.zeros_like(self.model_B.pq_code_embedding.weight)
+        embedding_grad_sum = torch.zeros_like(self.model_B.pq_code_embedding_specific.weight)
+        embedding_user_grad_sum = torch.zeros_like(self.model_B.pq_code_user_embedding_specific.weight)
         loss_func = loss_func or self.model_B.calculate_loss
         total_loss = None
         iter_data = (
@@ -202,7 +205,7 @@ class Trainer(AbstractTrainer):
         for batch_idx, interaction in enumerate(iter_data):
             interaction = interaction.to(self.device)
             self.optimizer_B.zero_grad()
-            losses = self.model_B.calculate_loss(interaction) #+ 0.005 * torch.norm(self.model_B.pq_code_embedding.weight - global_embedding.weight) ** 2
+            losses = self.model_B.calculate_loss(interaction, global_embedding, global_embedding_user) #+ 0.005 * torch.norm(self.model_B.pq_code_embedding.weight - global_embedding.weight) ** 2
             if isinstance(losses, tuple):
                 loss = sum(losses)
                 loss_tuple = tuple(per_loss.item() for per_loss in losses)
@@ -215,10 +218,11 @@ class Trainer(AbstractTrainer):
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model_B.parameters(), **self.clip_grad_norm)
             self.optimizer_B.step()
-            embedding_grad_sum += self.model_B.pq_code_embedding.weight.grad.clone()
+            embedding_grad_sum += self.model_B.pq_code_embedding_specific.weight.grad.clone()
+            embedding_user_grad_sum += self.model_B.pq_code_user_embedding_specific.weight.grad.clone()
             if self.gpu_available and show_progress:
                 iter_data.set_postfix_str(set_color('Loss: ' + str(losses.item()), 'yellow'))
-        return total_loss, embedding_grad_sum
+        return total_loss, embedding_grad_sum, embedding_user_grad_sum  
 
     def _check_nan(self, loss):
         if torch.isnan(loss):
@@ -262,13 +266,14 @@ class FedtrainTrainer(Trainer):
     It can be inherited by the trainer which needs pre-training and fine-tuning.
     """
 
-    def __init__(self, config_A, config_B, model_A, model_B, global_embedding):
+    def __init__(self, config_A, config_B, model_A, model_B, global_embedding, global_embedding_user):
         super(FedtrainTrainer, self).__init__(config_A, config_B, model_A, model_B)
         self.pretrain_epochs = self.config_A['pretrain_epochs']
         self.device = self.config_A['device']
         self.num_clients = 2
         self.save_step = self.config_A['save_step']
         self.global_embedding = global_embedding
+        self.global_embedding_user = global_embedding_user
         self.epsilon = self.config_A['epsilon']  # 隐私预算，控制噪声强度
         self.delta = 1e-5  # 失败概率，控制隐私保证的可靠性
         self.num_bits = self.config_A['num_bits']  # 量化的位数，控制梯度的精度[6, 10]
@@ -277,7 +282,7 @@ class FedtrainTrainer(Trainer):
         self.scale_factor = self.clip_threshold / self.num_buckets  # 缩放因子，用于将梯度转换为整数
         self.prob_p = (np.exp(self.epsilon) + 1) / (np.exp(self.epsilon) + 2)  # 随机响应中翻转概率的分子
         self.prob_q = 1 / (np.exp(self.epsilon) + 2)  # 随机响应中翻转概率的分母
-        
+
         # self.attn_layer = nn.MultiheadAttention(config_A['hidden_size'], num_heads=4).to(config_A['device'])
 
     # 定义一个函数，用于对梯度进行量化，即将梯度转换为整数值
@@ -362,9 +367,10 @@ class FedtrainTrainer(Trainer):
         for epoch_idx in range(self.start_epoch, self.pretrain_epochs):
             # train
             client_gradients = []
+            client_gradients_user = []
             training_start_time = time()
-            train_loss_A, embedding_grad_A = self._train_epoch_A(train_data_A, epoch_idx, self.global_embedding, show_progress=show_progress)
-            train_loss_B, embedding_grad_B = self._train_epoch_B(train_data_B, epoch_idx, self.global_embedding, show_progress=show_progress)
+            train_loss_A, embedding_grad_A, embedding_user_grad_A = self._train_epoch_A(train_data_A, epoch_idx, self.global_embedding, self.global_embedding_user, show_progress=show_progress)
+            train_loss_B, embedding_grad_B, embedding_user_grad_B = self._train_epoch_B(train_data_B, epoch_idx, self.global_embedding, self.global_embedding_user, show_progress=show_progress)
             self.train_loss_dict_A[epoch_idx] = sum(train_loss_A) if isinstance(train_loss_A, tuple) else train_loss_A
             self.train_loss_dict_B[epoch_idx] = sum(train_loss_B) if isinstance(train_loss_B, tuple) else train_loss_B
             training_end_time = time()
@@ -384,23 +390,39 @@ class FedtrainTrainer(Trainer):
             client_gradients_A = self.randomize(client_gradients_A)
             client_gradients_B = self.quantize(embedding_grad_B.clone())
             client_gradients_B = self.randomize(client_gradients_B)
+
+            client_gradients_A_user = self.quantize(embedding_user_grad_A.clone())
+            client_gradients_A_user = self.randomize(client_gradients_A_user)
+            client_gradients_B_user = self.quantize(embedding_user_grad_B.clone())
+            client_gradients_B_user = self.randomize(client_gradients_B_user)
+
+            client_gradients_user.append(client_gradients_A_user)
+            client_gradients_user.append(client_gradients_B_user)
             client_gradients.append(client_gradients_A)
             client_gradients.append(client_gradients_B)
             global_embedding_params = self.global_embedding.state_dict()
+            global_embedding_user_params = self.global_embedding_user.state_dict()
             for key in global_embedding_params.keys():
                 global_embedding_params[key] = global_embedding_params[key] - \
                                                self.learning_rate * self.aggregate(client_gradients, weight)
+            for key in global_embedding_user_params.keys():
+                global_embedding_user_params[key] = global_embedding_user_params[key] - \
+                                                    self.learning_rate * self.aggregate(client_gradients_user, weight)
             self.global_embedding.load_state_dict(global_embedding_params)
-            self.model_A.pq_code_embedding.load_state_dict(self.global_embedding.state_dict())
-            self.model_B.pq_code_embedding.load_state_dict(self.global_embedding.state_dict())
+            self.global_embedding_user.load_state_dict(global_embedding_user_params)
+            self.model_A.pq_code_embedding_share.load_state_dict(self.global_embedding.state_dict())
+            self.model_B.pq_code_embedding_share.load_state_dict(self.global_embedding.state_dict())
+            self.model_A.pq_code_user_embedding_share.load_state_dict(self.global_embedding_user.state_dict())
+            self.model_B.pq_code_user_embedding_share.load_state_dict(self.global_embedding_user.state_dict())
             if (epoch_idx + 1) % self.save_step == 0:
                 saved_model_file_A = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()))
+                    '{}-{}-{}-{}-i{}{}-i{}{}-u{}{}-u{}{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()),self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight, 
+                                                                        self.config_A['dataset'], self.model_A.regularization_loss_weight_user, self.config_B['dataset'], self.model_B.regularization_loss_weight_user)
                 )
                 saved_model_file_B = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()))
+                    '{}-{}-{}-{}-i{}{}-i{}{}-u{}{}-u{}{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()), self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight, self.config_A['dataset'], self.model_A.regularization_loss_weight_user, self.config_B['dataset'], self.model_B.regularization_loss_weight_user)
                 )
                 self.save_pretrained_model_A(epoch_idx, saved_model_file_A)
                 self.save_pretrained_model_B(epoch_idx, saved_model_file_B)

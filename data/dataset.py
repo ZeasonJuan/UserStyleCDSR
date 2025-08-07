@@ -123,6 +123,15 @@ class FederatedDataset(SequentialDataset):
         self.index_suffix = config['index_suffix']
         self.pq_codes = pq_codes
 
+class FederatedPlusDataset(SequentialDataset):
+    def __init__(self, config, pq_codes, pq_codes_user=None):
+        super().__init__(config)
+        self.code_dim = config['code_dim']
+        self.code_cap = config['code_cap']
+        self.index_suffix = config['index_suffix']
+        self.pq_codes = pq_codes
+        self.pq_codes_user = pq_codes_user
+
 class FederatedDatasetRQ(SequentialDataset):
     def __init__(self, config, text_embedding):
         super().__init__(config)
