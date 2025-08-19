@@ -56,13 +56,13 @@ if __name__ == '__main__':
                 pure_user_id = int(pure_user_id)
                 assert _ == did
                 pure_items_in_seq = [int(_.split('-')[-1]) for _ in items_in_seq]
-                if pure_user_id not in user_dict[int(did)].keys(): 
-                    user_dict[int(did)][int(pure_user_id)] = pure_items_in_seq
-                else:
-                    #如果用户的序列长度小于当前的序列长度，则更新
-                    if len(pure_items_in_seq) > len(user_dict[int(did)][int(pure_user_id)]):
-                        print('pure_user_id: ', pure_user_id, 'updated seq: ', user_dict[int(did)][int(pure_user_id)], 'to', pure_items_in_seq)
-                        user_dict[int(did)][int(pure_user_id)] = pure_items_in_seq
+                # if pure_user_id not in user_dict[int(did)].keys(): 
+                #     user_dict[int(did)][int(pure_user_id)] = pure_items_in_seq
+                # else:
+                #     #如果用户的序列长度小于当前的序列长度，则更新
+                #     if len(pure_items_in_seq) > len(user_dict[int(did)][int(pure_user_id)]):
+                #         print('pure_user_id: ', pure_user_id, 'updated seq: ', user_dict[int(did)][int(pure_user_id)], 'to', pure_items_in_seq)
+                #         user_dict[int(did)][int(pure_user_id)] = pure_items_in_seq
                 user_set[int(did)].add(int(pure_user_id))
         
         inter_path = os.path.join(args.input_path, short_name, f'{short_name}.train.inter')

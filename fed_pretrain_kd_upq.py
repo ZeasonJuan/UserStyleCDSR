@@ -17,6 +17,20 @@ import torch
 
 from utils import parse_faiss_index
 
+def load_text_emb(config): 
+    short_datasets_name = config['pq_data'] if config['pq_data'] is not None else config['index_pretrain_dataset']
+    datasets = config['datasets'].split(",")
+    text_embs = []
+    for did, ds in enumerate(datasets): 
+        file_path = os.path.join(config['data_path'],
+                                 f"{ds}.feat1CLS")
+        loaded_feat = np.fromfile(file_path, dtype=np.float32).reshape(-1, 768)
+        zeros = torch.zeros((1, 768), dtype=torch.float32)
+        new_loaded_feat = torch.cat((zeros, torch.from_numpy(loaded_feat)), dim=0)
+        text_embs.append(new_loaded_feat)
+    return text_embs
+        
+
 #user的不需要pad
 def load_index_user(config, logger, user_num, field2id_token_user):
     code_dim = config['code_dim']
@@ -62,7 +76,7 @@ def load_index_user(config, logger, user_num, field2id_token_user):
     for i, token in enumerate(field2id_token_user):
         mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
     
-    return torch.LongTensor(mapped_codes)
+    return torch.LongTensor(mapped_codes), uni_index
 
 def load_index(config, logger, item_num, field2id_token):
     code_dim = config['code_dim']
@@ -126,6 +140,7 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
 
     # configurations initialization
     config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
+    text_emb_A, text_emb_B = load_text_emb(config)
     config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs)
     kwargs['regularization_loss_weight'] = regularization_loss_weight_B
     config_B = Config(model=VQRecKDUPQ, dataset='A', config_file_list=props, config_dict=kwargs)
@@ -160,7 +175,8 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     field2id_token = np.concatenate((dataset_A.field2id_token['item_id'], dataset_B.field2id_token['item_id'][1:]))
     #这里得到了两个数据集合并的原始item_id列表field2id_token
     #pq_codes_user = load_index_user(config, logger, user_num, field2id_token_user)
-    pq_codes_user = load_index_user(config, logger, user_num, field2id_token_user).to(config['device'])
+    pq_codes_user, uni_index = load_index_user(config, logger, user_num, field2id_token_user)
+    pq_codes_user = pq_codes_user.to(config['device'])
     pq_codes = load_index(config, logger, item_num, field2id_token).to(config['device'])
     item_pq_A = pq_codes[:spilt_point + 1]
     item_pq_B = torch.cat([pq_codes[0].unsqueeze(0), pq_codes[spilt_point + 1:]], dim=0)
@@ -177,10 +193,14 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
     model_A.pq_codes.to(config['device'])
     model_A.pq_codes_user.to(config['device'])
+    model_A.text_emb = np.array(text_emb_A, dtype=np.float32)
+    model_A.uni_index = uni_index
     logger.info(model_A)
     model_B = VQRecKDUPQ(config_B, pretrain_data_B.dataset).to(config['device'])
     model_B.pq_codes.to(config['device'])
     model_B.pq_codes_user.to(config['device'])  
+    model_B.text_emb = np.array(text_emb_B, dtype=np.float32)
+    model_B.uni_index = uni_index
     logger.info(model_B)
     global_embedding = nn.Embedding(
         config['code_dim'] * (1 + config['code_cap']), config['hidden_size'], padding_idx=0).to(config['device'])

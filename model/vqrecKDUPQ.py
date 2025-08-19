@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from recbole.model.layers import TransformerEncoder
+import numpy as np
+import faiss
 from recbole.model.abstract_recommender import SequentialRecommender
 
 
@@ -53,6 +55,10 @@ class VQRecKDUPQ(SequentialRecommender):
         self.code_dim = config['code_dim']
         self.code_cap = config['code_cap']
         self.pq_codes = dataset.pq_codes
+        self.text_emb = None
+        self.uni_index = None
+        self.code_cap = config['code_cap']
+        self._codes_cache = {}
         self.pq_codes_user = dataset.pq_codes_user
         # self.neg_code = neg_code
         self.temperature = config['temperature']
@@ -139,13 +145,137 @@ class VQRecKDUPQ(SequentialRecommender):
         raw_embed = self.pq_code_embedding_specific.weight.reshape(self.code_dim, self.code_cap + 1, -1)
         trans_embed = torch.bmm(trans, raw_embed).reshape(-1, self.hidden_size)
         return trans_embed
+
+    def get_summary(self, item_seq): 
+        np_item_seq = np.array(item_seq.cpu().numpy(), dtype=np.int64)
+        summary = self.text_emb[np_item_seq]
+        summary = np.mean(summary, axis=-2)
+        return summary
+
+    def get_codes(self, index, X_768: np.ndarray):
+        """Encode style embeddings to PQ codes using an existing OPQ+IVF+PQ index.
+        X_768: np.ndarray of shape [n, 768], dtype can be anything but will be cast to float32.
+        Returns: np.ndarray of uint8 codes with shape [n, M].
+        """
+        # 1) Extract OPQ (if any) and the underlying IVF index (base class)
+        if isinstance(index, faiss.IndexPreTransform):
+            opq = faiss.downcast_VectorTransform(index.chain.at(0))  # OPQMatrix
+            ivf_base = faiss.extract_index_ivf(index.index)           # IndexIVF (base)
+        else:
+            opq = None
+            ivf_base = faiss.extract_index_ivf(index)                 # IndexIVF (base)
+
+        # 2) Downcast to the concrete IVF subtype; prefer IVFPQ
+        ivf_specific = ivf_base
+        if hasattr(faiss, 'downcast_index'):
+            try:
+                ivf_specific = faiss.downcast_index(ivf_base)
+            except Exception:
+                ivf_specific = ivf_base
+
+        if not isinstance(ivf_specific, faiss.IndexIVFPQ):
+            raise TypeError(
+                f"Underlying IVF is not IVFPQ (got {type(ivf_specific)}). Ensure the index was trained as IVFPQ (e.g., '...PQxx')."
+            )
+
+        ivfpq = ivf_specific  # now a proper IndexIVFPQ
+        pq = ivfpq.pq  # ProductQuantizer
+
+        # 3) Prepare input: float32 + contiguous
+        X = X_768.astype('float32', copy=False)
+        X = np.ascontiguousarray(X)  # [n, 768]
+
+        # 4) Apply OPQ transform if present
+        X_t = opq.apply_py(X) if opq is not None else X  # [n, d]
+
+        # 5) Encode: IVF1 shortcut or general IVF*n*
+        if ivfpq.nlist == 1:
+            # list id always 0; prefer sa_encode if available
+            try:
+                codes = ivfpq.sa_encode(X_t)  # [n, M] uint8
+            except Exception:
+                centroids = faiss.vector_to_array(ivfpq.quantizer.xb).reshape(ivfpq.nlist, ivfpq.d)
+                c0 = centroids[0]
+                residual = X_t - c0
+                codes = pq.compute_codes(residual)  # [n, M] uint8
+        else:
+            # General case: find nearest coarse centroid per vector
+            try:
+                _dists, labels = ivfpq.quantizer.search(X_t, 1)  # labels: [n,1]
+                list_ids = labels[:, 0].astype(np.int32)
+            except Exception:
+                list_ids = np.empty((X_t.shape[0],), dtype=np.int32)
+                ivfpq.quantizer.assign(X_t, 1, list_ids)
+
+            try:
+                codes = ivfpq.sa_encode(X_t)  # let faiss handle residual + PQ
+            except Exception:
+                centroids = faiss.vector_to_array(ivfpq.quantizer.xb).reshape(ivfpq.nlist, ivfpq.d)
+                C = centroids[list_ids]
+                residual = X_t - C
+                codes = pq.compute_codes(residual)  # [n, M] uint8
+
+        return codes
+        
+    def codes_remapp(self, codes):
+        base_id = 0
+        for i in range(codes.shape[1]): 
+            codes[:, i] += base_id
+            base_id += self.code_cap  # code_cap
+        return torch.LongTensor(codes)
             
     def forward(self, item_seq, item_seq_len, user_id):
+        assert self.text_emb is not None, "Text embeddings must be loaded before forward pass"
         assert user_id is not None, "user_id must be provided for VQRecKDUPQ"
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
-        
+
+        # ----- 用户风格SID的两种使用方式 -----
+        # 动态：基于本条序列的summary即时编码（慢，但更细粒度）
+        summary = self.get_summary(item_seq)  # np.ndarray [B, 768]
+
+        # 可选：简单缓存（以 (user_id, seq_len) 作为key；对“前缀序列”数据集是唯一的）
+        codes_tensor = None
+        if self._codes_cache is not None:
+            keys = [(int(u.item()), int(l.item())) for u, l in zip(user_id, item_seq_len)]
+            miss_mask = []
+            miss_idx = []
+            cached_codes = []
+            for i, k in enumerate(keys):
+                if k in self._codes_cache:
+                    cached_codes.append(self._codes_cache[k])
+                    miss_mask.append(False)
+                else:
+                    cached_codes.append(None)
+                    miss_mask.append(True)
+                    miss_idx.append(i)
+            if any(miss_mask):
+                # 编码未命中部分（保持批量）
+                miss_summary = summary[miss_idx]
+                miss_codes = self.get_codes(self.uni_index, miss_summary)  # np.uint8 [m, M]
+                # remap并转tensor
+                miss_codes = self.codes_remapp(miss_codes).to(item_seq.device)
+                # 写回缓存 & 组装
+                mi = 0
+                filled = []
+                for i, k in enumerate(keys):
+                    if miss_mask[i]:
+                        self._codes_cache[k] = miss_codes[mi].detach().cpu()
+                        filled.append(miss_codes[mi:mi+1])
+                        mi += 1
+                    else:
+                        filled.append(cached_codes[i].to(item_seq.device).unsqueeze(0))
+                codes_tensor = torch.cat(filled, dim=0)  # [B, M]
+            else:
+                codes_tensor = torch.stack([c.to(item_seq.device) for c in cached_codes], dim=0)
+    
+        # summary = self.get_summary(item_seq)
+        # codes = self.get_codes(self.uni_index, summary)
+        # codes = self.codes_remapp(codes)
+        codes_emb = self.pq_code_user_embedding_specific(codes_tensor).mean(dim=-2)  # [B H]
+        codes_emb = self.LayerNorm(codes_emb)
+        codes_emb = self.dropout(codes_emb)
         #pq_code是(item_num, code_dim(32)), 其中每个dim的取值在[0, code_cap(256)]之间
         #若index为0，则表示padding
         pq_code_seq = self.pq_codes[item_seq]
@@ -166,7 +296,8 @@ class VQRecKDUPQ(SequentialRecommender):
         user_output = self.pq_code_user_embedding_specific(self.pq_codes_user[user_id]).mean(dim=-2)
         user_output = self.LayerNorm(user_output)
         user_output = self.dropout(user_output)
-        output = self.concat_layer(torch.cat([output, user_output], dim=-1))
+        output = self.concat_layer(torch.cat([output, codes_emb], dim=-1))
+        #output = self.concat_layer(torch.cat([output, user_output], dim=-1))
         return output  # [B H],输出是个embedding
 
     def calculate_item_emb(self):
@@ -279,18 +410,19 @@ class VQRecKDUPQ(SequentialRecommender):
                 logits /= self.temperature
             
             loss = self.loss_fct(logits, pos_items)
-            if global_embedding is not None:
-                mse = nn.MSELoss(reduction='mean')
-                self.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
-                regulaization_loss = mse(self.pq_code_embedding_specific.weight, self.pq_code_embedding_share.weight)
-                loss += regulaization_loss * self.regularization_loss_weight
+            #底下是mse kd设计，现在先屏蔽掉
+            # if global_embedding is not None:
+            #     mse = nn.MSELoss(reduction='mean')
+            #     self.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
+            #     regulaization_loss = mse(self.pq_code_embedding_specific.weight, self.pq_code_embedding_share.weight)
+            #     loss += regulaization_loss * self.regularization_loss_weight
                 
-            if global_embedding_user is not None: 
+            # if global_embedding_user is not None: 
                 
-                mse = nn.MSELoss(reduction='mean')
-                self.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
-                regulaization_loss = mse(self.pq_code_user_embedding_specific.weight, self.pq_code_user_embedding_share.weight)
-                loss += regulaization_loss * self.regularization_loss_weight_user
+            #     mse = nn.MSELoss(reduction='mean')
+            #     self.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
+            #     regulaization_loss = mse(self.pq_code_user_embedding_specific.weight, self.pq_code_user_embedding_share.weight)
+            #     loss += regulaization_loss * self.regularization_loss_weight_user
 
             return loss
 

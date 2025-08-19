@@ -1,5 +1,5 @@
 data_path: 'dataset/office-arts/' #😁
-
+datasets: 'Office,Arts' #😁
 benchmark_filename: [train, valid, test]
 alias_of_item_id: [item_id_list]
 load_col:
@@ -14,6 +14,7 @@ train_batch_size: 1024
 index_path: dataset/office-arts/ #😁
 index_pretrain_dataset: OA #😁
 filter_id_suffix: filtered_id
+filter_id_suffix_user: filtered_user_id
 gpu_id: 2
 checkpoint_dir : 'save_OA/' #😁
 epsilon: 0.3
