@@ -10,6 +10,7 @@ from model.vqrec import VQRec
 from model.vqrecKD import VQRecKD
 from model.vqrecKDUPQ import VQRecKDUPQ
 from data.dataset import FederatedPlusDataset
+from utils import Seq2BertBank
 import os
 import faiss
 # import numpy as np
@@ -41,11 +42,19 @@ def load_index_user(config, logger, user_num, field2id_token_user):
         index_dataset = config['index_pretrain_dataset']
     else:
         index_dataset = config['dataset']
-    index_path = os.path.join(
-        config['index_path'],
-        index_dataset,
-        f'{index_dataset}_user.{index_suffix}'
-    )
+    summary_mode = config['summary_mode']
+    if summary_mode == "Mean":
+        index_path = os.path.join(
+            config['index_path'],
+            index_dataset,
+            f'{index_dataset}_user.{index_suffix}'
+        )
+    else:
+        index_path = os.path.join(
+            config['index_path'],
+            index_dataset,
+            f'{index_dataset}_user_{summary_mode}.{index_suffix}'
+        )
     logger.info(f'Index path: {index_path}')
     uni_index = faiss.read_index(index_path)
     pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
@@ -141,6 +150,9 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     # configurations initialization
     config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
     text_emb_A, text_emb_B = load_text_emb(config)
+    if config['summary_mode'] != "Mean":
+        seq2bert_A = Seq2BertBank(config, config['datasets'].split(",")[0])
+        seq2bert_B = Seq2BertBank(config, config['datasets'].split(",")[1])
     config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs)
     kwargs['regularization_loss_weight'] = regularization_loss_weight_B
     config_B = Config(model=VQRecKDUPQ, dataset='A', config_file_list=props, config_dict=kwargs)
@@ -202,6 +214,9 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     model_B.text_emb = np.array(text_emb_B, dtype=np.float32)
     model_B.uni_index = uni_index
     logger.info(model_B)
+    if config['summary_mode'] != "Mean":
+        model_A.seq2bert = seq2bert_A
+        model_B.seq2bert = seq2bert_B
     global_embedding = nn.Embedding(
         config['code_dim'] * (1 + config['code_cap']), config['hidden_size'], padding_idx=0).to(config['device'])
     global_embedding.weight.data.normal_(mean=0.0, std=config['initializer_range'])
@@ -235,7 +250,7 @@ if __name__ == '__main__':
     # for kdwa in [1000]: 
     #     for kdwb in [0.2, 0.5, 1, 10, 100]:
             parser = argparse.ArgumentParser()
-            parser.add_argument('-d', type=str, default='OA', help='dataset name')
+            parser.add_argument('-d', type=str, default='OA', help='dataset name') #😁
             # parser.add_argument('-regularization_loss_weight_A', type=float, default=kdwa, help='weight for regularization loss A')
             # parser.add_argument('-regularization_loss_weight_B', type=float, default=kdwb, help='weight for regularization loss B')
             args, _ = parser.parse_known_args()

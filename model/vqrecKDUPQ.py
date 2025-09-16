@@ -52,9 +52,13 @@ class VQRecKDUPQ(SequentialRecommender):
         super().__init__(config, dataset)
 
         # VQRec args
+        self.seq2bert = None
         self.code_dim = config['code_dim']
         self.code_cap = config['code_cap']
+        self.summary_mode = config['summary_mode']
         self.pq_codes = dataset.pq_codes
+        self.id_dict = dataset.field2token_id['item_id']
+        self.id_dict = self.reverse_dictionary(self.id_dict)
         self.text_emb = None
         self.uni_index = None
         self.code_cap = config['code_cap']
@@ -125,6 +129,17 @@ class VQRecKDUPQ(SequentialRecommender):
 
         # parameters initialization
         self.apply(self._init_weights)
+    def reverse_dictionary(self, d: dict):
+        temp_dict = {}
+        for k, v in d.items():
+            if v == '[PAD]':
+                continue
+            try:
+                temp_dict[v] = int(k[2:]) # int(k[2:])是因为k是'0-123'这种格式
+            except ValueError:
+                print(f"Warning: Key '{k}' with value '{v}' cannot be converted to int. Skipping.")
+                continue
+        return temp_dict
 
     def _init_weights(self, module):
         """ Initialize the weights """
@@ -147,10 +162,13 @@ class VQRecKDUPQ(SequentialRecommender):
         return trans_embed
 
     def get_summary(self, item_seq): 
-        np_item_seq = np.array(item_seq.cpu().numpy(), dtype=np.int64)
-        summary = self.text_emb[np_item_seq]
-        summary = np.mean(summary, axis=-2)
-        return summary
+        if self.summary_mode == "Mean":
+            np_item_seq = np.array(item_seq.cpu().numpy(), dtype=np.int64)
+            summary = self.text_emb[np_item_seq]
+            summary = np.mean(summary, axis=-2)
+            return summary
+        elif self.summary_mode == "LLMEasy":
+            return self.seq2bert.get_batch(item_seq, self.training)
 
     def get_codes(self, index, X_768: np.ndarray):
         """Encode style embeddings to PQ codes using an existing OPQ+IVF+PQ index.
@@ -225,8 +243,12 @@ class VQRecKDUPQ(SequentialRecommender):
         return torch.LongTensor(codes)
             
     def forward(self, item_seq, item_seq_len, user_id):
-        assert self.text_emb is not None, "Text embeddings must be loaded before forward pass"
+        if self.summary_mode == "Mean": 
+            assert self.text_emb is not None, "Text embeddings must be loaded before forward pass"
         assert user_id is not None, "user_id must be provided for VQRecKDUPQ"
+        if self.summary_mode != "Mean": 
+            assert self.seq2bert is not None, "Seq2BertBank must be initialized for summary modes other than 'Mean'"
+            self.seq2bert.id_dict = self.id_dict
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
