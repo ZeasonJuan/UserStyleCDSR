@@ -9,6 +9,7 @@ initializer_range: 0.02
 regularization_loss_weight: 1
 regularization_loss_weight_user: 1
 loss_type: 'CE'
+summary_mode: "LLMEasy" #LLMEasy, Mean, LLM
 #如果要换数据集（不同的两个域），要改code_dim和index_suffix
 code_dim: 48 #oa48， op32😁
 code_cap: 256

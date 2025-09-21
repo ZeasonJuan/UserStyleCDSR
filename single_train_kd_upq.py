@@ -20,23 +20,40 @@ import faiss
 import torch
 from recbole.data import data_preparation
 from trainer import VQRecTrainer
-from utils import parse_faiss_index
+from utils import Seq2BertBank, parse_faiss_index
+
+def load_text_emb(config): 
+    short_datasets_name = config['pq_data'] if config['pq_data'] is not None else config['index_pretrain_dataset']
+    datasets = config['datasets'].split(",")
+    text_embs = []
+    for did, ds in enumerate(datasets): 
+        file_path = os.path.join(config['data_path'],
+                                 f"{ds}.feat1CLS")
+        loaded_feat = np.fromfile(file_path, dtype=np.float32).reshape(-1, 768)
+        zeros = torch.zeros((1, 768), dtype=torch.float32)
+        new_loaded_feat = torch.cat((zeros, torch.from_numpy(loaded_feat)), dim=0)
+        text_embs.append(new_loaded_feat)
+    return text_embs
 
 def load_index_user(config, logger, field2id_token_user, user_num):
     code_dim = config['code_dim']
     code_cap = config['code_cap']
-    dataset_name = config['dataset']
     index_suffix = config['index_suffix']
-    pq_path = config['pq_data']
-    if config['index_pretrain_dataset'] is not None:
-        index_dataset = config['index_pretrain_dataset']
-    else:
-        index_dataset = config['dataset']
-    index_path = os.path.join(
-        config['index_path'],
-        pq_path,
-        f'{pq_path}_user.{index_suffix}'
-    )
+    dataset_two_abbre = config['dataset']
+    summary_mode = config['summary_mode']
+    
+    if config['summary_mode'] == "Mean":
+        index_path = os.path.join(
+            config['index_path'],
+            dataset_two_abbre,
+            f'{dataset_two_abbre}_user.{index_suffix}'
+        )
+    else: 
+        index_path = os.path.join(
+            config['index_path'],
+            dataset_two_abbre,
+            f'{dataset_two_abbre}_user_{summary_mode}.{index_suffix}'
+        )
     logger.info(f'Index path: {index_path}')
     uni_index = faiss.read_index(index_path)
     pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
@@ -55,7 +72,7 @@ def load_index_user(config, logger, field2id_token_user, user_num):
     filter_id_dct = {}
     with open(
             os.path.join(config['data_path'],
-                         f'{dataset_name}.{config["filter_id_suffix_user"]}'),
+                         f'{dataset_two_abbre}.{config["filter_id_suffix_user"]}'),
             'r', encoding='utf-8') as file:
         for idx, line in enumerate(file):
             filter_id_name = line.strip()
@@ -67,7 +84,7 @@ def load_index_user(config, logger, field2id_token_user, user_num):
     for i, token in enumerate(field2id_token_user):
         mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
     
-    return torch.LongTensor(mapped_codes)
+    return torch.LongTensor(mapped_codes), uni_index
 
 def load_index(config, logger, field2id_token, item_num):
     code_dim = config['code_dim']
@@ -75,10 +92,7 @@ def load_index(config, logger, field2id_token, item_num):
     dataset_name = config['dataset']
     index_suffix = config['index_suffix']
     pq_path = config['pq_data']
-    if config['index_pretrain_dataset'] is not None:
-        index_dataset = config['index_pretrain_dataset']
-    else:
-        index_dataset = config['dataset']
+    
     index_path = os.path.join(
         config['index_path'],
         pq_path,
@@ -128,7 +142,10 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
 
     # configurations initialization
     config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
+    if config['summary_mode'] != "Mean":
+        seq2bert_A = Seq2BertBank(config, config['datasets'].split(",")[0])
     config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs) #这里的P要进行设置，是要进行微调的单个数据集的首字母缩写
+    text_emb_A, text_emb_B = load_text_emb(config)
     init_seed(config['seed'], config['reproducibility'])
     init_seed(config_A['seed'], config['reproducibility'])
     # logger initialization
@@ -141,7 +158,8 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     pretrain_dataset_A = dataset_A.build()[0]
     
     pq_codes = load_index(config, logger, dataset_A.field2id_token['item_id'], dataset_A.item_num).to(config['device'])
-    pq_codes_user = load_index_user(config, logger, dataset_A.field2id_token['user_id'][1:], dataset_A.user_num - 1).to(config['device'])
+    pq_codes_user, uni_index = load_index_user(config, logger, dataset_A.field2id_token['user_id'][1:], dataset_A.user_num - 1)
+    pq_codes_user = pq_codes_user.to(config['device'])
     pretrain_dataset_A.pq_codes = pq_codes
     pretrain_dataset_A.pq_codes_user = pq_codes_user
     dataset.pq_codes_user = pq_codes_user
@@ -150,8 +168,12 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     train_data, valid_data, test_data = data_preparation(config_A, dataset)
 
     model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
+    if config['summary_mode'] != "Mean":
+        model_A.seq2bert = seq2bert_A
     model_A.pq_codes.to(config['device'])
     model_A.pq_codes_user.to(config['device'])
+    model_A.uni_index = uni_index
+    model_A.text_emb = np.array(text_emb_A, dtype=np.float32)
     # model_A.private_codes = model_A.private_codes.to(config['device'])
     if pretrained_file != '':
         checkpoint = torch.load(pretrained_file)
@@ -205,7 +227,7 @@ if __name__ == '__main__':
         # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-O-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
         # OA 😁
         # parser.add_argument('-p', type=str, default='save_OA/VQRecKD-A-10-2025-07-10-kdw0.2.pth', help='pre-trained model path')
-        parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-08-04-iO1-iA1-uO1-uA1.pth', help='pre-trained model path')
+        parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-09-16-iO1-iA1-uO1-uA1.pth', help='pre-trained model path')
         parser.add_argument('-f', type=str, default='', help='fine-tune mode')
         args, unparsed = parser.parse_known_args()
         print(args)

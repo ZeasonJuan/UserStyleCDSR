@@ -20,7 +20,7 @@ save_step: 10
 train_batch_size: 1024
 
 index_path: dataset/office-arts #😁
-index_pretrain_dataset: P
+index_pretrain_dataset: Office #😁
 filter_id_suffix: filtered_id
 filter_id_suffix_user: filtered_user_id
 checkpoint_dir : 'save_OA/' #😁

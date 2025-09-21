@@ -40,6 +40,7 @@ def convert_inter_to_seq_text(
     swap: bool = False,
     joiner: str = " "
 ) -> None:
+    max_len_seq = 0
     """
     Read a .inter file (new_id sequences), map to raw_id -> text, and write
     "<seq_as_new_ids>\t<concatenated_texts>" per line to out_path.
@@ -84,10 +85,12 @@ def convert_inter_to_seq_text(
                 continue
 
             seq_str = cols[seq_col]
-            id_tokens = [tok for tok in seq_str.split(" ") if tok != ""]
-
+            id_tokens = [tok[2:] for tok in seq_str.split(" ") if tok != ""] # 去掉前缀"0-""
+            if len(id_tokens) > max_len_seq:
+                max_len_seq = len(id_tokens)
             texts = []
             any_missing = False
+            
             for tok in id_tokens:
                 # new_id could be numeric
                 try:
@@ -111,16 +114,18 @@ def convert_inter_to_seq_text(
                 missing += 1
 
     print(f"[seq2text] lines={total}, wrote={wrote}, with_missing={missing}, out='{out_path}'")
+    print(f"[seq2text] max_seq_len={max_len_seq}")
 
 if __name__ == "__main__":
-    datasets = "office-arts"
-    dataset_abb = "OA"
-    dataset_all = "Office"
+    datasets = "or-pantry"
+    dataset_abb = "OP"
+    dataset_abb_single = "P"
+    dataset_all = "Pantry"
     train_or_test = "train"  # or "test"
     convert_inter_to_seq_text(
-        inter_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_abb}.{train_or_test}.inter",
-        item2index_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.item2index",
-        text_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.text",
-        out_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_abb}.seq2text_{train_or_test}.tsv",
-        joiner=" "
+        inter_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_abb_single}.{train_or_test}.inter",
+        item2index_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_all}.item2index",
+        text_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_all}.text",
+        out_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.seq2text_{train_or_test}.tsv",
+        joiner="|||"
     )

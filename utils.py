@@ -87,12 +87,11 @@ class Seq2BertBank:
     def get_batch(self, batch_seqs, training=True):
         """batch_seqs: 二维的torch.Tensor"""
         assert isinstance(batch_seqs, torch.Tensor) and batch_seqs.dim() == 2
-        if not training: 
-            key2row = self.key2row_test
-            vecs = self.vecs_test
-        else:
-            key2row = self.key2row
-            vecs = self.vecs
+        key2row_test = self.key2row_test
+        vecs_test = self.vecs_test
+        key2row = self.key2row
+        vecs = self.vecs
+        
         out = np.zeros((len(batch_seqs), self.D), dtype=np.float32)
         index = 0
         for s in batch_seqs:
@@ -104,14 +103,14 @@ class Seq2BertBank:
                 lst = key[:idx[-1]+1].tolist()
                 str_list = " ".join(str(self.id_dict[x]) for x in lst)
                 row_index = key2row.get(str_list, -1)
-                if row_index == -1:
-                    print(training, key2row is self.key2row)
-                    print(f"Warning: sequence {str_list} not found in seq2bert bank.")
-                    print("Available keys:", list(key2row.keys())[:10])
-                    print("Requested key:", str_list)
-                    raise ValueError(f"Sequence {str_list} not found in seq2bert bank.")
-                out[index] = vecs[row_index]
-                if training:
-                    self.train_torch_seq_to_emb[key] = out[index]
+                if row_index == -1: # 训练集中没有，去测试集中找    
+                    row_index = key2row_test.get(str_list, -1)
+                    if row_index == -1:
+                        raise ValueError(f"Sequence {str_list} not found in seq2bert bank.")
+                    out[index] = vecs_test[row_index]
+                else:
+                    out[index] = vecs[row_index]
+                
+                self.train_torch_seq_to_emb[key] = out[index] # 记住这个seq的embedding
             index += 1
         return out
