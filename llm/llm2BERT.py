@@ -7,31 +7,25 @@ from tqdm import tqdm
 # ----------------- 配置 -----------------
 emb_type = "CLS"                      # "CLS" 或 "Mean"
 plm_name = "bert-base-uncased"
-device = "cuda:4"                     # 你的显卡
+device = "cuda:1"                     # 你的显卡
 batch_size = 128                      # 按显存调
 max_len = 512                         # BERT base 最大就是 512
 l2_normalize = False                  # 是否对向量做 L2 归一化
 
-INPUT_SEQ2LLM_TSV   = "../dataset/office-arts/OA/Arts.seq2summary_test.tsv"
-OUTPUT_BASENAME     = "../dataset/office-arts/OA/Arts.seq2bert_test"  # 会生成 .npy 和 .map.tsv
+INPUT_SEQ2LLM_TSV   = "../dataset/office-arts/OA/Office.seq2summary_test.tsv"
+OUTPUT_BASENAME     = "../dataset/office-arts/OA/Office.seq2bert_test"  # 会生成 .npy 和 .map.tsv
 
-CACHE_DIR = "/mnt/disk2/tingtao.zheng/hf_cache/models--bert-base-uncased/snapshots/86b5e0934494bd15c9632b12f734a8a67f723594"  # 你的 transformers 缓存目录
 # 要去掉的前缀（忽略大小写；只在句首才去）
-PREFIX_PAT = re.compile(r"^\s*the user demonstrates a consistent\s*", re.IGNORECASE)
+PREFIX_PAT = re.compile(r"^\s*the user\s*", re.IGNORECASE)
 
 # ----------------- 函数 -----------------
 def load_plm(model_name="bert-base-uncased"):
     logging.set_verbosity_error()
-    tok = AutoTokenizer.from_pretrained(
-        CACHE_DIR,
-        local_files_only=True,   # 关键：强制只用本地缓存
-    )
-    mdl = AutoModel.from_pretrained(
-        CACHE_DIR,
-        local_files_only=True,
-    )
-    mdl.eval().to(device)
-    return tok, mdl
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    model = AutoModel.from_pretrained("bert-base-uncased")
+
+    model.eval().to(device)
+    return tokenizer, model
 
 def clean_prefix(text: str) -> str:
     return re.sub(PREFIX_PAT, "", text).strip()

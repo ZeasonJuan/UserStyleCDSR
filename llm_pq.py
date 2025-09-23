@@ -17,11 +17,12 @@ def parse_args():
     parser.add_argument('--input_path', type=str, default='dataset/office-arts/')
     parser.add_argument('--output_path', type=str, default='dataset/office-arts/')
     parser.add_argument('--gpu_id', type=int, default=0, help='ID of running GPU')
-    parser.add_argument('--suffix', type=str, default='seq2bert.npy')
-    parser.add_argument('--suffix1', type=str, default='seq2bert.map.tsv')
+    parser.add_argument('--suffix', type=str, default='seq2bert_train.npy')
+    parser.add_argument('--suffix1', type=str, default='seq2bert_train.map.tsv')
     parser.add_argument('--plm_size', type=int, default=768)
 
     # PQ
+    # 😊
     parser.add_argument("--subvector_num", type=int, default=48, help='16/24/32/48/64/96')
     parser.add_argument("--n_centroid", type=int, default=8)
     parser.add_argument("--use_gpu", type=int, default=False)
@@ -116,11 +117,14 @@ if __name__ == '__main__':
                 parts = line.rstrip("\n").split("\t")
                 if parts[0] == "row_index": 
                     continue  # 跳过表头
-                str_seq = parts[1]
+                # 将形如 "0-1 0-3 0-9 0-2" 转为 "1 3 9 2"
+                tokens = parts[1].strip().split()
+                str_seq = " ".join(str(int(tok.split("-")[-1])) for tok in tokens if tok)
                 row = int(parts[0])
                 key2row[str_seq] = row
         print(f"Loaded mapping from {map_path} with {len(key2row)} keys.")
         if args.strict:
+            #取出每个user最长的序列的bert向量
             for uid in filter_user_id_list[did].tolist():
                 this_user_items_seq = user_dict[int(did)][uid]
                 this_user_items_seq = " ".join(f"{iid}" for iid in this_user_items_seq)

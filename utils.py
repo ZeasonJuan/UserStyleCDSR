@@ -64,7 +64,12 @@ class Seq2BertBank:
         self.l2norm = l2norm
         self.id_dict = None
         # key是训练时的torch.Tensor(1维)，value是对应的embedding（1维的np.array）
-        self.train_torch_seq_to_emb = {}
+        try: 
+            with open(self.OUTPUT_FILE_PATH, "rb") as f:
+                loaded_data = pickle.load(f)
+                self.train_torch_seq_to_emb = loaded_data
+        except FileNotFoundError:
+            self.train_torch_seq_to_emb = {}
 
         # 2) 读映射
         self.key2row = {}

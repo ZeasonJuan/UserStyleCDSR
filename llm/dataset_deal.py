@@ -119,13 +119,13 @@ def convert_inter_to_seq_text(
 if __name__ == "__main__":
     datasets = "or-pantry"
     dataset_abb = "OP"
-    dataset_abb_single = "P"
-    dataset_all = "Pantry"
-    train_or_test = "train"  # or "test"
+    dataset_abb_single = "O"
+    dataset_all = "OR"
+    train_or_test = "valid"  # or "test"
     convert_inter_to_seq_text(
         inter_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_abb_single}.{train_or_test}.inter",
-        item2index_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_all}.item2index",
-        text_path=f"../dataset/{datasets}/{dataset_abb_single}/{dataset_all}.text",
+        item2index_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.item2index",
+        text_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.text",
         out_path=f"../dataset/{datasets}/{dataset_abb}/{dataset_all}.seq2text_{train_or_test}.tsv",
         joiner="|||"
     )

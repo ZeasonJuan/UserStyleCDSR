@@ -240,7 +240,8 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     weight = torch.tensor(weight).to(config['device'])
     trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding, global_embedding_user)
     trainer.fedtrain(pretrain_data_A, pretrain_data_B, weight, show_progress=True)
-
+    model_A.seq2bert.save_to_pickle()
+    model_B.seq2bert.save_to_pickle()
     return config['model'], config['dataset']
 
 

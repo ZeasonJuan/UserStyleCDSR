@@ -15,7 +15,7 @@ index_path: dataset/office-arts/ #😁
 index_pretrain_dataset: OA #😁
 filter_id_suffix: filtered_id
 filter_id_suffix_user: filtered_user_id
-gpu_id: 2
+gpu_id: 1
 checkpoint_dir : 'save_OA/' #😁
 epsilon: 0.3
 num_bits: 8   

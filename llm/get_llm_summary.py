@@ -17,7 +17,7 @@ def paint(data: list):
 
 BASE_URL = "http://127.0.0.1:8011/v1" #mark😁
 API_KEY  = "dummy"
-MODEL_ID = "phi3.5-mini"
+MODEL_ID = "qwen3-8b"
 
 CONCURRENCY = 64             # 并发度（按显存+模型大小调）
 OUTPUT_JSONL = "llm_summary_500.jsonl"
@@ -40,94 +40,71 @@ A single paragraph summarizing the user's preference style, just provide the sum
 """
 
 client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY)
-HF_MODEL_ID = "microsoft/Phi-3.5-mini-instruct"  # 用于本地计数的 HF 模型名
+HF_MODEL_ID = "qwen/qwen3-8b"  # 用于本地计数的 HF 模型名
 MODEL_CTX_LEN = 10000                              # vLLM 启动时的 --max-model-len
 MAX_NEW_TOKENS = 256                              # 你在请求里设的 max_tokens
 SAFETY_MARGIN = 32  
 
 ct_len = []
 PROMPT_BUDGET = MODEL_CTX_LEN - MAX_NEW_TOKENS - SAFETY_MARGIN
+LOCAL_DIR = "../hf_cache/qwen3-8b"  # 本地缓存目录
 
 _tokenizer = AutoTokenizer.from_pretrained(
-    HF_MODEL_ID,
+    LOCAL_DIR,
     use_fast=True,
     local_files_only=True  # 没网环境读本地缓存
 )
-
-def _count_chat_tokens(messages):
-    """
-    计算 chat 消息在当前模型下的 token 数。
-    优先使用 chat_template（与 vLLM 对齐），若不可用则退化到拼接文本。
-    """
-    # try:
-    ids = _tokenizer.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,  # 与 chat.completions 一致
-    )
-    return len(ids)
-    # except Exception:
-    #     # 退化：简单拼接角色与内容（不完全精确，但可作为兜底）
-    #     concat = []
-    #     for m in messages:
-    #         role = m.get("role", "user")
-    #         content = m.get("content", "")
-    #         concat.append(f"<{role}>\n{content}\n</{role}>\n")
-    #     toks = _tokenizer("".join(concat), add_special_tokens=False).input_ids
-    #     return len(toks)
 
 
 async def one_call(seq_items, idx, sem):
     lines = "\n".join(seq_items)
     prompt = PROMPT_TEMPLATE.format(lines=lines)
-    # 原来的 messages
     messages = [
         {"role": "system", "content": "Return only the single summary paragraph which is less than 512 tokens."},
         {"role": "user", "content": prompt},
     ]
 
-    # # 计算并截断到预算（PROMPT_BUDGET）
-    # messages, trunc_info = _truncate_user_to_budget(messages, PROMPT_BUDGET)
-    ct = 66666 
-    loop_number = 0
-    while ct >= 511:
-        async with sem:
-            t0 = time.perf_counter()
-            resp = await client.chat.completions.create(
-                model=MODEL_ID,
-                messages=messages,
-                temperature=0.0,
-                seed=42,
-                max_tokens=512,
-            )
-            t1 = time.perf_counter()
+    async with sem:
+        t0 = time.perf_counter()
+        resp = await client.chat.completions.create(
+            model=MODEL_ID,
+            messages=messages,
+            temperature=0.0,
+            seed=42,
+            max_tokens=512,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": False},
+            },  #这个是qwen特有的，让它不思考。用emoji标记一下😁
+        )
+        t1 = time.perf_counter()
 
-        content = resp.choices[0].message.content
-        usage = getattr(resp, "usage", None)
-        pt = getattr(usage, "prompt_tokens", 0) if usage else 0
-        
-        ct = getattr(usage, "completion_tokens", 0) if usage else 0
-        print(f"Prompt tokens: {pt}, Completion tokens: {ct}")
-        loop_number += 1
-        if loop_number >= 5:
-            exit(1)
-        if ct >= 511:
-            print(content)
-            print(messages)
+    content = resp.choices[0].message.content or ""
+    usage = getattr(resp, "usage", None)
+    pt = getattr(usage, "prompt_tokens", 0) if usage else 0
+    ct = getattr(usage, "completion_tokens", 0) if usage else 0
+    print(f"Prompt tokens: {pt}, Completion tokens: {ct}")
+
+    # 若返回过长（>=512），直接截取前 100 个 token
+    # 这是为了防止不聪明的LLM的复读机现象
+    trimmed_content = content
+    if ct >= 511 and content:
+        ids = _tokenizer(content, add_special_tokens=False).input_ids
+        head_ids = ids[:100]
+        trimmed_content = _tokenizer.decode(head_ids, skip_special_tokens=True)
+        print("发生截断，截断后内容为：", trimmed_content)
     ct_len.append(ct)
 
     return {
         "index": idx,
         "latency_sec": round(t1 - t0, 4),
-        "completion_tokens": ct,
+        "completion_tokens": ct,  # 仍记录原始返回 token 数，方便统计
         "prompt_tokens": pt,
-        "output": content,
+        "output": trimmed_content,
     }
 
 
-INPUT_SEQ2TEXT_TSV = "../dataset/office-arts/OA/Office.seq2text_train.tsv"       # 你的 (item_newid_seq -> items_text) 输入文件
-OUTPUT_SEQ2LLM_TSV = "../dataset/office-arts/OA/Office.seq2summary_train.tsv"    # 产出的 (item_newid_seq -> llm_summary) 文件
-JOINER = " "                                      # 你当前的 joiner
+INPUT_SEQ2TEXT_TSV = "../dataset/or-pantry/OP/Pantry.seq2text_valid.tsv"       # 你的 (item_newid_seq -> items_text) 输入文件
+OUTPUT_SEQ2LLM_TSV = "../dataset/or-pantry/OP/Pantry.seq2summary_valid.tsv"    # 产出的 (item_newid_seq -> llm_summary) 文件
 # ====== 小工具：读取 seq2text TSV ======
 def load_seq2text_tsv(path):
     """
