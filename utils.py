@@ -4,6 +4,7 @@ import faiss
 from recbole.data.utils import create_dataset as create_recbole_dataset
 import numpy as np
 import torch
+import pickle
 
 def parse_faiss_index(pq_index):
     vt = faiss.downcast_VectorTransform(pq_index.chain.at(0))
@@ -38,18 +39,26 @@ class Seq2BertBank:
     def __init__(self, config, dataset_all_name, l2norm=False, mmap=True):
         # 1) 读 npy（用 memmap 节省内存）
         device = config['device']
+        self.OUTPUT_FILE_PATH = os.path.join(config['data_path'], f"{dataset_all_name}.torch2numpy_dict.pkl")
         map_tsv = os.path.join(config['data_path'],
-                                 f"{dataset_all_name}.seq2bert.map.tsv")
+                                 f"{dataset_all_name}.seq2bert_train.map.tsv")
         npy_path = os.path.join(config['data_path'],
-                                 f"{dataset_all_name}.seq2bert.npy")
+                                 f"{dataset_all_name}.seq2bert_train.npy")
         map_tsv_test = os.path.join(config['data_path'],
                                  f"{dataset_all_name}.seq2bert_test.map.tsv")
         npy_path_test = os.path.join(config['data_path'],
                                  f"{dataset_all_name}.seq2bert_test.npy")
+        map_tsv_valid = os.path.join(config['data_path'],
+                                 f"{dataset_all_name}.seq2bert_valid.map.tsv")
+        npy_path_valid = os.path.join(config['data_path'],
+                                 f"{dataset_all_name}.seq2bert_valid.npy")
         self.vecs = np.load(npy_path, mmap_mode="r" if mmap else None)  # (N, D)
         self.vecs_test = np.load(npy_path_test, mmap_mode="r" if mmap else None)  # (N, D)
+        self.vecs_valid = np.load(npy_path_valid, mmap_mode="r" if mmap else None)  # (N, D)
         print(f"Loaded seq2bert bank from {npy_path} with shape {self.vecs.shape}, "
-                f"and {npy_path_test} with shape {self.vecs_test.shape}.")
+                f"and {npy_path_test} with shape {self.vecs_test.shape}, "
+                f"and {npy_path_valid} with shape {self.vecs_valid.shape}.")
+
         self.D = self.vecs.shape[1]
         self.device = torch.device(device)
         self.l2norm = l2norm
@@ -66,7 +75,8 @@ class Seq2BertBank:
                 parts = line.rstrip("\n").split("\t")
                 if parts[0] == "row_index": 
                     continue  # 跳过表头
-                str_seq = parts[1]
+                tokens = parts[1].strip().split()
+                str_seq = " ".join(str(int(tok.split("-")[-1])) for tok in tokens if tok)
                 key = str_seq
                 row = int(parts[0])
                 self.key2row[key] = row
@@ -78,10 +88,29 @@ class Seq2BertBank:
                 parts = line.rstrip("\n").split("\t")
                 if parts[0] == "row_index": 
                     continue  # 跳过表头
-                str_seq = parts[1]
+                tokens = parts[1].strip().split()
+                str_seq = " ".join(str(int(tok.split("-")[-1])) for tok in tokens if tok)
                 key = str_seq
                 row = int(parts[0])
                 self.key2row_test[key] = row
+        self.key2row_valid = {}
+        with open(map_tsv_valid, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                # 支持一种格式：
+                # a) row_id \t seq
+                parts = line.rstrip("\n").split("\t")
+                if parts[0] == "row_index": 
+                    continue  # 跳过表头
+                tokens = parts[1].strip().split()
+                str_seq = " ".join(str(int(tok.split("-")[-1])) for tok in tokens if tok)
+                key = str_seq
+                row = int(parts[0])
+                self.key2row_valid[key] = row
+
+    def save_to_pickle(self):
+        with open(self.OUTPUT_FILE_PATH, 'wb') as f:
+            pickle.dump(self.train_torch_seq_to_emb, f)
+        print(f'Saved train_torch_seq_to_emb to {self.OUTPUT_FILE_PATH}, size: {len(self.train_torch_seq_to_emb)}')
 
 
     def get_batch(self, batch_seqs, training=True):
@@ -89,6 +118,8 @@ class Seq2BertBank:
         assert isinstance(batch_seqs, torch.Tensor) and batch_seqs.dim() == 2
         key2row_test = self.key2row_test
         vecs_test = self.vecs_test
+        key2row_valid = self.key2row_valid
+        vecs_valid = self.vecs_valid
         key2row = self.key2row
         vecs = self.vecs
         
@@ -106,8 +137,13 @@ class Seq2BertBank:
                 if row_index == -1: # 训练集中没有，去测试集中找    
                     row_index = key2row_test.get(str_list, -1)
                     if row_index == -1:
-                        raise ValueError(f"Sequence {str_list} not found in seq2bert bank.")
-                    out[index] = vecs_test[row_index]
+                        row_index = key2row_valid.get(str_list, -1)
+                        if row_index == -1:
+                            print('not found seq: ', str_list)
+                            raise ValueError("seq not found in seq2bert bank")
+                        out[index] = vecs_valid[row_index]
+                    else:
+                        out[index] = vecs_test[row_index]
                 else:
                     out[index] = vecs[row_index]
                 
