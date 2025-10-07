@@ -249,6 +249,8 @@ class VQRecKDUPQ(SequentialRecommender):
             raise NotImplementedError("LLM summary mode is not implemented yet.")
         elif self.summary_mode == "withoutSID":
             return self.seq2bert.get_batch(item_seq, self.training)
+        elif self.summary_mode == "USIDOnly":
+            return self.seq2bert.get_batch(item_seq, self.training)
         else:
             raise ValueError(f"Unknown summary mode: {self.summary_mode}")
 
@@ -334,7 +336,7 @@ class VQRecKDUPQ(SequentialRecommender):
         if self.summary_mode == "Mean": 
             assert self.text_emb is not None, "Text embeddings must be loaded before forward pass"
         assert user_id is not None, "user_id must be provided for VQRecKDUPQ"
-        if self.summary_mode == "LLMEasy" or self.summary_mode == "LLM" or self.summary_mode == "withoutSID": 
+        if self.summary_mode == "LLMEasy" or self.summary_mode == "LLM" or self.summary_mode == "withoutSID" or self.summary_mode == "USIDOnly": 
             assert self.seq2bert is not None, "Seq2BertBank must be initialized for summary modes other than 'Mean'"
             self.seq2bert.id_dict = self.id_dict
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
@@ -438,6 +440,8 @@ class VQRecKDUPQ(SequentialRecommender):
         codes_emb = self.pq_code_user_embedding_specific(codes_tensor).mean(dim=-2)  # [B H]
         codes_emb = self.LayerNorm(codes_emb)
         codes_emb = self.dropout(codes_emb)
+        if self.summary_mode == "USIDOnly":
+            return codes_emb  # [B H],输出是个embedding
         #pq_code是(item_num, code_dim(32)), 其中每个dim的取值在[0, code_cap(256)]之间
         #若index为0，则表示padding
         pq_code_seq = self.pq_codes[item_seq]

@@ -50,7 +50,7 @@ def load_index_user(config, logger, user_num, field2id_token_user):
             index_dataset,
             f'{index_dataset}_user.{index_suffix}'
         )
-    elif summary_mode == "LLMEasy" or summary_mode == "LLM" or summary_mode == "withoutSID":
+    elif summary_mode == "LLMEasy" or summary_mode == "LLM" or summary_mode == "withoutSID" or summary_mode == "USIDOnly":
         index_path = os.path.join(
             config['index_path'],
             index_dataset,
@@ -153,7 +153,7 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     # configurations initialization
     config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
     text_emb_A, text_emb_B = load_text_emb(config)
-    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID" or config['summary_mode'] == "USIDOnly":
         seq2bert_A = Seq2BertBank(config, config['datasets'].split(",")[0])
         seq2bert_B = Seq2BertBank(config, config['datasets'].split(",")[1])
     config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs)
@@ -222,7 +222,7 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     model_B.text_emb = np.array(text_emb_B, dtype=np.float32)
     model_B.uni_index = uni_index
     logger.info(model_B)
-    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID" or config['summary_mode'] == "USIDOnly":
         model_A.seq2bert = seq2bert_A
         model_B.seq2bert = seq2bert_B
     global_embedding = nn.Embedding(

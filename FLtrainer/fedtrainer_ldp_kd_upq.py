@@ -182,7 +182,10 @@ class Trainer(AbstractTrainer):
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model_A.parameters(), **self.clip_grad_norm)
             self.optimizer_A.step()
-            embedding_grad_sum += self.model_A.pq_code_embedding_specific.weight.grad.clone()
+            if self.model_A.summary_mode == "USIDOnly":  #验证LLM+Bert，不使用SID
+                embedding_grad_sum += torch.zeros_like(self.model_A.pq_code_embedding_specific.weight)
+            else:
+                embedding_grad_sum += self.model_A.pq_code_embedding_specific.weight.grad.clone()
             if self.model_A.summary_mode == "withoutSID":  #验证LLM+Bert，不使用SID
                 embedding_user_grad_sum += torch.zeros_like(self.model_A.pq_code_user_embedding_specific.weight)
             else:
@@ -221,7 +224,10 @@ class Trainer(AbstractTrainer):
             if self.clip_grad_norm:
                 clip_grad_norm_(self.model_B.parameters(), **self.clip_grad_norm)
             self.optimizer_B.step()
-            embedding_grad_sum += self.model_B.pq_code_embedding_specific.weight.grad.clone()
+            if self.model_B.summary_mode == "USIDOnly":  #验证LLM+Bert，不使用SID
+                embedding_grad_sum += torch.zeros_like(self.model_B.pq_code_embedding_specific.weight)
+            else:
+                embedding_grad_sum += self.model_B.pq_code_embedding_specific.weight.grad.clone()
             if self.model_B.summary_mode == "withoutSID":  #验证LLM+Bert，不使用SID
                 embedding_user_grad_sum += torch.zeros_like(self.model_B.pq_code_user_embedding_specific.weight)
             else:

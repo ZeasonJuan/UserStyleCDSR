@@ -49,7 +49,7 @@ def load_index_user(config, logger, field2id_token_user, user_num):
             dataset_two_abbre,
             f'{dataset_two_abbre}_user.{index_suffix}'
         )
-    elif config['summary_mode'] == "LLM" or config['summary_mode'] == "LLMEasy" or summary_mode == "withoutSID": 
+    elif config['summary_mode'] == "LLM" or config['summary_mode'] == "LLMEasy" or summary_mode == "withoutSID" or summary_mode == "USIDOnly": 
         index_path = os.path.join(
             config['index_path'],
             dataset_two_abbre,
@@ -143,8 +143,8 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     print(props)
 
     # configurations initialization
-    config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
-    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
+    config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)  
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID" or config['summary_mode'] == "USIDOnly":
         seq2bert_A = Seq2BertBank(config, config['datasets'].split(",")[1]) #😁
     config_A = Config(model=VQRecKDUPQ, dataset='A', config_file_list=props, config_dict=kwargs) #这里的P要进行设置，是要进行微调的单个数据集的首字母缩写
     text_emb_A, text_emb_B = load_text_emb(config)
@@ -172,7 +172,7 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     train_data, valid_data, test_data = data_preparation(config_A, dataset)
 
     model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
-    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID" or config['summary_mode'] == "USIDOnly":
         model_A.seq2bert = seq2bert_A
     model_A.pq_codes.to(config['device'])
     if pq_codes_user is not None:
