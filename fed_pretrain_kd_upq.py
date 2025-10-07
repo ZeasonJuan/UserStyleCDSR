@@ -19,6 +19,7 @@ import torch
 from utils import parse_faiss_index
 
 def load_text_emb(config): 
+    torch.set_printoptions(threshold=float('inf'))
     short_datasets_name = config['pq_data'] if config['pq_data'] is not None else config['index_pretrain_dataset']
     datasets = config['datasets'].split(",")
     text_embs = []
@@ -49,12 +50,14 @@ def load_index_user(config, logger, user_num, field2id_token_user):
             index_dataset,
             f'{index_dataset}_user.{index_suffix}'
         )
-    else:
+    elif summary_mode == "LLMEasy" or summary_mode == "LLM" or summary_mode == "withoutSID":
         index_path = os.path.join(
             config['index_path'],
             index_dataset,
-            f'{index_dataset}_user_{summary_mode}.{index_suffix}'
+            f'{index_dataset}_user_LLMEasy.{index_suffix}' # 暂时的，后续需要进行修改！标注一下😁，需要把LLMEasy替换成{summary_mode}
         )
+    elif summary_mode == "Empty":
+        return None, None
     logger.info(f'Index path: {index_path}')
     uni_index = faiss.read_index(index_path)
     pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
@@ -150,7 +153,7 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     # configurations initialization
     config = Config(model=VQRecKDUPQ, dataset=dataset, config_file_list=props, config_dict=kwargs)
     text_emb_A, text_emb_B = load_text_emb(config)
-    if config['summary_mode'] != "Mean":
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
         seq2bert_A = Seq2BertBank(config, config['datasets'].split(",")[0])
         seq2bert_B = Seq2BertBank(config, config['datasets'].split(",")[1])
     config_A = Config(model=VQRecKDUPQ, dataset='O', config_file_list=props, config_dict=kwargs)
@@ -188,33 +191,38 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     #这里得到了两个数据集合并的原始item_id列表field2id_token
     #pq_codes_user = load_index_user(config, logger, user_num, field2id_token_user)
     pq_codes_user, uni_index = load_index_user(config, logger, user_num, field2id_token_user)
-    pq_codes_user = pq_codes_user.to(config['device'])
+    if pq_codes_user is not None:
+        pq_codes_user = pq_codes_user.to(config['device'])
     pq_codes = load_index(config, logger, item_num, field2id_token).to(config['device'])
     item_pq_A = pq_codes[:spilt_point + 1]
     item_pq_B = torch.cat([pq_codes[0].unsqueeze(0), pq_codes[spilt_point + 1:]], dim=0)
-    user_pq_A = pq_codes_user[:spilt_point_user]
-    user_pq_B = pq_codes_user[spilt_point_user:]
+    if pq_codes_user is not None:
+        user_pq_A = pq_codes_user[:spilt_point_user]
+        user_pq_B = pq_codes_user[spilt_point_user:]
     
     pretrain_dataset_A.pq_codes = item_pq_A
     pretrain_dataset_B.pq_codes = item_pq_B
-    pretrain_dataset_A.pq_codes_user = user_pq_A
-    pretrain_dataset_B.pq_codes_user = user_pq_B
+    if pq_codes_user is not None:
+        pretrain_dataset_A.pq_codes_user = user_pq_A
+        pretrain_dataset_B.pq_codes_user = user_pq_B
     pretrain_data_A = TrainDataLoader(config_A, pretrain_dataset_A, None, shuffle=True)
     pretrain_data_B = TrainDataLoader(config_A, pretrain_dataset_B, None, shuffle=True)
 
     model_A = VQRecKDUPQ(config_A, pretrain_data_A.dataset).to(config['device'])
     model_A.pq_codes.to(config['device'])
-    model_A.pq_codes_user.to(config['device'])
+    if pq_codes_user is not None:
+        model_A.pq_codes_user.to(config['device'])
     model_A.text_emb = np.array(text_emb_A, dtype=np.float32)
     model_A.uni_index = uni_index
     logger.info(model_A)
     model_B = VQRecKDUPQ(config_B, pretrain_data_B.dataset).to(config['device'])
     model_B.pq_codes.to(config['device'])
-    model_B.pq_codes_user.to(config['device'])  
+    if pq_codes_user is not None:
+        model_B.pq_codes_user.to(config['device'])  
     model_B.text_emb = np.array(text_emb_B, dtype=np.float32)
     model_B.uni_index = uni_index
     logger.info(model_B)
-    if config['summary_mode'] != "Mean":
+    if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM" or config['summary_mode'] == "withoutSID":
         model_A.seq2bert = seq2bert_A
         model_B.seq2bert = seq2bert_B
     global_embedding = nn.Embedding(
@@ -240,8 +248,9 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     weight = torch.tensor(weight).to(config['device'])
     trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding, global_embedding_user)
     trainer.fedtrain(pretrain_data_A, pretrain_data_B, weight, show_progress=True)
-    model_A.seq2bert.save_to_pickle()
-    model_B.seq2bert.save_to_pickle()
+    # if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM":
+    #     model_A.seq2bert.save_to_pickle()
+    #     model_B.seq2bert.save_to_pickle()
     return config['model'], config['dataset']
 
 

@@ -16,10 +16,10 @@ def parse_faiss_index(pq_index):
     ls = invlists.list_size(0)
     pq_codes = faiss.rev_swig_ptr(invlists.get_codes(0), ls * invlists.code_size)
     pq_codes = pq_codes.reshape(-1, invlists.code_size)
-
+    
     centroid_embeds = faiss.vector_to_array(ivf_index.pq.centroids)
     centroid_embeds = centroid_embeds.reshape(ivf_index.pq.M, ivf_index.pq.ksub, ivf_index.pq.dsub)
-
+    
     coarse_quantizer = faiss.downcast_index(ivf_index.quantizer)
     coarse_embeds = faiss.rev_swig_ptr(coarse_quantizer.get_xb(), ivf_index.pq.M * ivf_index.pq.dsub)
     coarse_embeds = coarse_embeds.reshape(-1)
@@ -64,12 +64,12 @@ class Seq2BertBank:
         self.l2norm = l2norm
         self.id_dict = None
         # key是训练时的torch.Tensor(1维)，value是对应的embedding（1维的np.array）
-        try: 
-            with open(self.OUTPUT_FILE_PATH, "rb") as f:
-                loaded_data = pickle.load(f)
-                self.train_torch_seq_to_emb = loaded_data
-        except FileNotFoundError:
-            self.train_torch_seq_to_emb = {}
+        # try: 
+        #     with open(self.OUTPUT_FILE_PATH, "rb") as f:
+        #         loaded_data = pickle.load(f)
+        #         self.train_torch_seq_to_emb = loaded_data
+        # except FileNotFoundError:
+        self.train_torch_seq_to_emb = {}
 
         # 2) 读映射
         self.key2row = {}
@@ -135,7 +135,7 @@ class Seq2BertBank:
             if key in self.train_torch_seq_to_emb.keys():
                 out[index] = self.train_torch_seq_to_emb[key]
             else: 
-                idx = (key != 0).nonzero(as_tuple=True)[0]
+                idx = (key != 0).nonzero(as_tuple=True)[0]    
                 lst = key[:idx[-1]+1].tolist()
                 str_list = " ".join(str(self.id_dict[x]) for x in lst)
                 row_index = key2row.get(str_list, -1)

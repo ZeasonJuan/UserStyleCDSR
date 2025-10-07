@@ -30,6 +30,77 @@ def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
     r = (r + gumbel) / temperature
     return sinkhorn_sorting_operator(r, n_iters)
 
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_code_distribution(codes, code_cap=256, outdir="./figs", title_prefix="PQ codes"):
+    """
+    codes: np.ndarray 或 torch.Tensor，形状 [N, M]
+           - 原始 x8 PQ 码：每列是 [0..255]
+           - 若做过 remap（每列加了 m*code_cap）：会自动还原
+    code_cap: 每个子空间的码表大小（x8 就是 256）
+    outdir: 图片保存目录
+    """
+    os.makedirs(outdir, exist_ok=True)
+
+    # ---- 统一成 numpy，形状 [N, M] ----
+    if "torch" in str(type(codes)):
+        codes = codes.detach().cpu().numpy()
+    codes = np.asarray(codes)
+    assert codes.ndim == 2, f"codes must be 2D [N, M], got shape={codes.shape}"
+    N, M = codes.shape
+
+    # ---- 还原到 0..code_cap-1 的原始码 id（兼容 remap 过的情况）----
+    # 若本来就是 0..255，取模也不变；若每列加了 m*256，取模可还原
+    raw_codes = codes % code_cap   # [N, M], 每个值 ∈ [0..code_cap-1]
+
+    # ==========================
+    # (1) 整体直方图（所有子空间合并）
+    # ==========================
+    # 统计 0..255 的总体频次
+    counts_all = np.bincount(raw_codes.ravel(), minlength=code_cap)
+    x = np.arange(code_cap)
+
+    plt.figure(figsize=(12, 4))
+    plt.bar(x, counts_all, width=0.9)
+    plt.xlabel("code id (0..{})".format(code_cap-1))
+    plt.ylabel("frequency")
+    plt.title(f"{title_prefix} — overall histogram (N={N}, M={M})")
+    # x 轴不要画太密的刻度
+    step = max(1, code_cap // 16)
+    plt.xticks(np.arange(0, code_cap, step))
+    plt.tight_layout()
+    out1 = os.path.join(outdir, "codes_hist_overall.png")
+    plt.savefig(out1, dpi=150)
+    plt.close()
+    print(f"[saved] {out1}")
+
+    # ==========================
+    # (2) 热力图（子空间 × 码 id）
+    # ==========================
+    # 对每个子空间 m，统计 0..255 的频次
+    heat = np.zeros((M, code_cap), dtype=np.int64)  # [M, 256]
+    for m in range(M):
+        cnt = np.bincount(raw_codes[:, m], minlength=code_cap)
+        heat[m, :] = cnt
+
+    plt.figure(figsize=(min(18, 0.06*M + 6), 6))  # 宽度随 M 略缩放
+    # imshow 的默认坐标是 (y, x)，我们希望 y=code，x=subvector
+    plt.imshow(heat.T, aspect="auto", origin="lower")
+    plt.colorbar(label="frequency")
+    plt.xlabel("subvector index m (0..{})".format(M-1))
+    plt.ylabel("code id (0..{})".format(code_cap-1))
+    plt.title(f"{title_prefix} — heatmap per subvector (N={N}, M={M})")
+    plt.tight_layout()
+    out2 = os.path.join(outdir, "codes_heatmap.png")
+    plt.savefig(out2, dpi=150)
+    plt.close()
+    print(f"[saved] {out2}")
+
+    # （可选）返回统计数据，便于你后续分析
+    return counts_all, heat  # heat 形状 [M, 256]
+
 
 def differentiable_topk(x, k, temperature=1.):
     *_, n, dim = x.shape
@@ -53,6 +124,7 @@ class VQRecKDUPQ(SequentialRecommender):
 
         # VQRec args
         self.seq2bert = None
+        self.plm_size = config['plm_size']
         self.code_dim = config['code_dim']
         self.code_cap = config['code_cap']
         self.summary_mode = config['summary_mode']
@@ -102,7 +174,10 @@ class VQRecKDUPQ(SequentialRecommender):
             self.code_dim * (self.code_cap), self.hidden_size)
         self.pq_code_user_embedding_specific = nn.Embedding(
             self.code_dim * (self.code_cap), self.hidden_size)
-        self.concat_layer = nn.Linear(self.hidden_size * 2, self.hidden_size)
+        if self.summary_mode == "withoutSID":
+            self.concat_layer = nn.Linear(self.hidden_size + self.plm_size, self.hidden_size)
+        else:
+            self.concat_layer = nn.Linear(self.hidden_size * 2, self.hidden_size)
 
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size)
         self.trm_encoder = TransformerEncoder(
@@ -116,6 +191,7 @@ class VQRecKDUPQ(SequentialRecommender):
             layer_norm_eps=self.layer_norm_eps
         )
         self.trans_matrix = nn.Parameter(torch.randn(self.code_dim, self.code_cap + 1, self.code_cap + 1))
+
 
         self.LayerNorm = nn.LayerNorm(self.hidden_size, eps=self.layer_norm_eps)
         self.dropout = nn.Dropout(self.hidden_dropout_prob)
@@ -169,6 +245,12 @@ class VQRecKDUPQ(SequentialRecommender):
             return summary
         elif self.summary_mode == "LLMEasy":
             return self.seq2bert.get_batch(item_seq, self.training)
+        elif self.summary_mode == "LLM":
+            raise NotImplementedError("LLM summary mode is not implemented yet.")
+        elif self.summary_mode == "withoutSID":
+            return self.seq2bert.get_batch(item_seq, self.training)
+        else:
+            raise ValueError(f"Unknown summary mode: {self.summary_mode}")
 
     def get_codes(self, index, X_768: np.ndarray):
         """Encode style embeddings to PQ codes using an existing OPQ+IVF+PQ index.
@@ -198,7 +280,7 @@ class VQRecKDUPQ(SequentialRecommender):
 
         ivfpq = ivf_specific  # now a proper IndexIVFPQ
         pq = ivfpq.pq  # ProductQuantizer
-
+        assert pq.nbits == 8
         # 3) Prepare input: float32 + contiguous
         X = X_768.astype('float32', copy=False)
         X = np.ascontiguousarray(X)  # [n, 768]
@@ -211,7 +293,13 @@ class VQRecKDUPQ(SequentialRecommender):
             # list id always 0; prefer sa_encode if available
             try:
                 codes = ivfpq.sa_encode(X_t)  # [n, M] uint8
+
+                # counts_all, heat = plot_code_distribution(codes, code_cap=256, outdir="./figs", title_prefix="U-SID PQ48x8")
+                # print("Overall code frequency (0..255):", counts_all)
+                # print("Heatmap shape (M x 256):", heat.shape)
+                # exit()
             except Exception:
+                print("这边应无")
                 centroids = faiss.vector_to_array(ivfpq.quantizer.xb).reshape(ivfpq.nlist, ivfpq.d)
                 c0 = centroids[0]
                 residual = X_t - c0
@@ -246,13 +334,65 @@ class VQRecKDUPQ(SequentialRecommender):
         if self.summary_mode == "Mean": 
             assert self.text_emb is not None, "Text embeddings must be loaded before forward pass"
         assert user_id is not None, "user_id must be provided for VQRecKDUPQ"
-        if self.summary_mode != "Mean": 
+        if self.summary_mode == "LLMEasy" or self.summary_mode == "LLM" or self.summary_mode == "withoutSID": 
             assert self.seq2bert is not None, "Seq2BertBank must be initialized for summary modes other than 'Mean'"
             self.seq2bert.id_dict = self.id_dict
         position_ids = torch.arange(item_seq.size(1), dtype=torch.long, device=item_seq.device)
         position_ids = position_ids.unsqueeze(0).expand_as(item_seq)
         position_embedding = self.position_embedding(position_ids)
 
+        if self.summary_mode == "Empty":  # 验证随机生成SID
+            
+            #pq_code是(item_num, code_dim(32)), 其中每个dim的取值在[0, code_cap(256)]之间
+            #若index为0，则表示padding
+            pq_code_seq = self.pq_codes[item_seq]
+            if self.index_assignment_flag:
+                pq_code_emb = F.embedding(pq_code_seq, self.reassigned_code_embedding, padding_idx=0).mean(dim=-2)
+            else:
+                pq_code_emb = self.pq_code_embedding_specific(pq_code_seq).mean(dim=-2)
+            input_emb = pq_code_emb + position_embedding
+            input_emb = self.LayerNorm(input_emb)
+            input_emb = self.dropout(input_emb)
+
+            extended_attention_mask = self.get_attention_mask(item_seq)
+
+            trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
+            
+            output = trm_output[-1]
+            output = self.gather_indexes(output, item_seq_len - 1)
+            code = torch.randint(low=0, high=256, size=(output.shape[0], 48), dtype=torch.int64) # [B, M]
+            codes_tensor = self.codes_remapp(code).to(item_seq.device)
+            codes_emb = self.pq_code_user_embedding_specific(codes_tensor).mean(dim=-2)  # [B H]
+            codes_emb = self.LayerNorm(codes_emb)
+            codes_emb = self.dropout(codes_emb)
+            output = self.concat_layer(torch.cat([output, codes_emb], dim=-1))
+            return output  # [B H],输出是个embedding
+        
+        if self.summary_mode == "withoutSID":  #验证LLM+Bert，不使用SID
+            
+            #pq_code是(item_num, code_dim(32)), 其中每个dim的取值在[0, code_cap(256)]之间
+            #若index为0，则表示padding
+            pq_code_seq = self.pq_codes[item_seq]
+            if self.index_assignment_flag:
+                pq_code_emb = F.embedding(pq_code_seq, self.reassigned_code_embedding, padding_idx=0).mean(dim=-2)
+            else:
+                pq_code_emb = self.pq_code_embedding_specific(pq_code_seq).mean(dim=-2)
+            input_emb = pq_code_emb + position_embedding
+            input_emb = self.LayerNorm(input_emb)
+            input_emb = self.dropout(input_emb)
+
+            extended_attention_mask = self.get_attention_mask(item_seq)
+
+            trm_output = self.trm_encoder(input_emb, extended_attention_mask, output_all_encoded_layers=True)
+            
+            output = trm_output[-1]
+            output = self.gather_indexes(output, item_seq_len - 1)
+            codes_emb = self.get_summary(item_seq)  # np.ndarray [B, 768]
+            assert type(codes_emb) == np.ndarray
+            codes_emb = torch.tensor(codes_emb, dtype=torch.float32, device=item_seq.device)
+            
+            output = self.concat_layer(torch.cat([output, codes_emb], dim=-1))
+            return output
         # ----- 用户风格SID的两种使用方式 -----
         # 动态：基于本条序列的summary即时编码（慢，但更细粒度）
         summary = self.get_summary(item_seq)  # np.ndarray [B, 768]
@@ -315,9 +455,9 @@ class VQRecKDUPQ(SequentialRecommender):
         
         output = trm_output[-1]
         output = self.gather_indexes(output, item_seq_len - 1)
-        user_output = self.pq_code_user_embedding_specific(self.pq_codes_user[user_id]).mean(dim=-2)
-        user_output = self.LayerNorm(user_output)
-        user_output = self.dropout(user_output)
+        # user_output = self.pq_code_user_embedding_specific(self.pq_codes_user[user_id]).mean(dim=-2)
+        # user_output = self.LayerNorm(user_output)
+        # user_output = self.dropout(user_output)
         output = self.concat_layer(torch.cat([output, codes_emb], dim=-1))
         #output = self.concat_layer(torch.cat([output, user_output], dim=-1))
         return output  # [B H],输出是个embedding

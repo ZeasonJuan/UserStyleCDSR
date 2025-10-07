@@ -183,7 +183,10 @@ class Trainer(AbstractTrainer):
                 clip_grad_norm_(self.model_A.parameters(), **self.clip_grad_norm)
             self.optimizer_A.step()
             embedding_grad_sum += self.model_A.pq_code_embedding_specific.weight.grad.clone()
-            embedding_user_grad_sum += self.model_A.pq_code_user_embedding_specific.weight.grad.clone()
+            if self.model_A.summary_mode == "withoutSID":  #验证LLM+Bert，不使用SID
+                embedding_user_grad_sum += torch.zeros_like(self.model_A.pq_code_user_embedding_specific.weight)
+            else:
+                embedding_user_grad_sum += self.model_A.pq_code_user_embedding_specific.weight.grad.clone()
             if self.gpu_available and show_progress:
                 iter_data.set_postfix_str(set_color('Loss: ' + str(losses.item()), 'yellow'))
         return total_loss, embedding_grad_sum, embedding_user_grad_sum  
@@ -219,7 +222,10 @@ class Trainer(AbstractTrainer):
                 clip_grad_norm_(self.model_B.parameters(), **self.clip_grad_norm)
             self.optimizer_B.step()
             embedding_grad_sum += self.model_B.pq_code_embedding_specific.weight.grad.clone()
-            embedding_user_grad_sum += self.model_B.pq_code_user_embedding_specific.weight.grad.clone()
+            if self.model_B.summary_mode == "withoutSID":  #验证LLM+Bert，不使用SID
+                embedding_user_grad_sum += torch.zeros_like(self.model_B.pq_code_user_embedding_specific.weight)
+            else:
+                embedding_user_grad_sum += self.model_B.pq_code_user_embedding_specific.weight.grad.clone()
             if self.gpu_available and show_progress:
                 iter_data.set_postfix_str(set_color('Loss: ' + str(losses.item()), 'yellow'))
         return total_loss, embedding_grad_sum, embedding_user_grad_sum  
@@ -417,12 +423,11 @@ class FedtrainTrainer(Trainer):
             if (epoch_idx + 1) % self.save_step == 0:
                 saved_model_file_A = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}-i{}{}-i{}{}-u{}{}-u{}{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()),self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight, 
-                                                                        self.config_A['dataset'], self.model_A.regularization_loss_weight_user, self.config_B['dataset'], self.model_B.regularization_loss_weight_user)
+                    '{}-{}-{}-{}-{}.pth'.format(self.config_A['model'], self.config_A['dataset'], str(epoch_idx + 1), str(date.today()), self.config_A['summary_mode'])
                 )
                 saved_model_file_B = os.path.join(
                     self.checkpoint_dir,
-                    '{}-{}-{}-{}-i{}{}-i{}{}-u{}{}-u{}{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()), self.config_A['dataset'], self.model_A.regularization_loss_weight, self.config_B['dataset'], self.model_B.regularization_loss_weight, self.config_A['dataset'], self.model_A.regularization_loss_weight_user, self.config_B['dataset'], self.model_B.regularization_loss_weight_user)
+                    '{}-{}-{}-{}-{}.pth'.format(self.config_B['model'], self.config_B['dataset'], str(epoch_idx + 1), str(date.today()), self.config_B['summary_mode'])
                 )
                 self.save_pretrained_model_A(epoch_idx, saved_model_file_A)
                 self.save_pretrained_model_B(epoch_idx, saved_model_file_B)

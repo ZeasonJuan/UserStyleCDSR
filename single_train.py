@@ -145,7 +145,7 @@ if __name__ == '__main__':
     # parser.add_argument('-p', type=str, default='save_OP/VQRec-O-10-2025-06-29-e0.3-nb8.pth', help='pre-trained model path')
     # OA 
     # parser.add_argument('-p', type=str, default='save_OA/VQRec-A-10-2025-07-10.pth', help='pre-trained model path')
-    parser.add_argument('-p', type=str, default='save_OA/VQRec-O-10-2025-07-10.pth', help='pre-trained model path')
+    parser.add_argument('-p', type=str, default='save_OA/VQRec-O-10-2025-09-25.pth', help='pre-trained model path')
     parser.add_argument('-f', type=str, default='', help='fine-tune mode')
     args, unparsed = parser.parse_known_args()
     print(args)
