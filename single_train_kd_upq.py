@@ -21,7 +21,6 @@ import torch
 from recbole.data import data_preparation
 from trainer import VQRecTrainer
 from utils import Seq2BertBank, parse_faiss_index
-import matplotlib.pyplot as plt
 
 def load_text_emb(config): 
     short_datasets_name = config['pq_data'] if config['pq_data'] is not None else config['index_pretrain_dataset']
@@ -37,9 +36,9 @@ def load_text_emb(config):
     return text_embs
 
 def load_index_user(config, logger, field2id_token_user, user_num):
-    code_dim = config['code_dim']
+    user_code_dim = config['user_code_dim']
     code_cap = config['code_cap']
-    index_suffix = config['index_suffix']
+    user_index_suffix = config['user_index_suffix']
     dataset_two_abbre = config['dataset']
     summary_mode = config['summary_mode']
     
@@ -47,26 +46,26 @@ def load_index_user(config, logger, field2id_token_user, user_num):
         index_path = os.path.join(
             config['index_path'],
             dataset_two_abbre,
-            f'{dataset_two_abbre}_user.{index_suffix}'
+            f'{dataset_two_abbre}_user.{user_index_suffix}'
         )
     elif config['summary_mode'] == "LLM" or config['summary_mode'] == "LLMEasy" or summary_mode == "withoutSID" or summary_mode == "USIDOnly": 
         index_path = os.path.join(
             config['index_path'],
             dataset_two_abbre,
-            f'{dataset_two_abbre}_user_LLMEasy.{index_suffix}' #暂时的，后续需要进行修改！标注一下😁，需要把LLMEasy替换成{summary_mode}
+            f'{dataset_two_abbre}_user_LLMEasy.{user_index_suffix}' #暂时的，后续需要进行修改！标注一下😁，需要把LLMEasy替换成{summary_mode}
         )
     elif config['summary_mode'] == "Empty":
         return None, None
     logger.info(f'Index path: {index_path}')
     uni_index = faiss.read_index(index_path)
     pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
-    assert code_dim == pq_codes_user.shape[1], pq_codes_user.shape
+    assert user_code_dim == pq_codes_user.shape[1], pq_codes_user.shape
     # assert user_num == 1 + pq_codes.shape[0], f'{user_num}, {pq_codes.shape}'
     # uint8 -> int32 to reserve 0 padding
     pq_codes_user = pq_codes_user.astype(np.int32)
     # flatten pq codes
     base_id = 0
-    for i in range(code_dim):
+    for i in range(user_code_dim):
         pq_codes_user[:, i] += base_id
         base_id += code_cap
 
@@ -81,7 +80,7 @@ def load_index_user(config, logger, field2id_token_user, user_num):
             filter_id_dct[filter_id_name] = idx
 
     logger.info('Converting indexes.')
-    mapped_codes = np.zeros((user_num, code_dim), dtype=np.int32)
+    mapped_codes = np.zeros((user_num, user_code_dim), dtype=np.int32)
     #item情况下，mapped_codes[0]是padding的0, user情况下，mapped_codes[0]是0-0对应的pq_code
     for i, token in enumerate(field2id_token_user):
         mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
@@ -230,8 +229,13 @@ if __name__ == '__main__':
         # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-P-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
         # parser.add_argument('-p', type=str, default='save_OP/VQRecKD-O-10-2025-07-08-kdw0.2.pth', help='pre-trained model path')
         # OA 😁
-        # parser.add_argument('-p', type=str, default='save_OA/VQRecKD-A-10-2025-07-10-kdw0.2.pth', help='pre-trained model path')
-        parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-A-10-2025-09-23-iO1-iA1-uO1-uA1.pth', help='pre-trained model path')
+        parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-Oct-16-2025_08-17-20.pth', help='pre-trained model path')
+        # parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-Oct-13-2025_12-07-20.pth', help='pre-trained model path')
+        
+        # parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-10-13-LLMEasy.pth', help='pre-trained model path')
+        # parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-10-13-withoutSID.pth', help='pre-trained model path')
+        # parser.add_argument('-p', type=str, default=f'save_OA/VQRecKDUPQ-O-10-2025-10-13-Empty.pth', help='pre-trained model path')
+        
         parser.add_argument('-f', type=str, default='', help='fine-tune mode')
         args, unparsed = parser.parse_known_args()
         print(args)

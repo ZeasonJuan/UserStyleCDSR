@@ -12,8 +12,8 @@ batch_size = 128                      # 按显存调
 max_len = 512                         # BERT base 最大就是 512
 l2_normalize = False                  # 是否对向量做 L2 归一化
 
-INPUT_SEQ2LLM_TSV   = "../dataset/office-arts/OA/Office.seq2summary_test.tsv"
-OUTPUT_BASENAME     = "../dataset/office-arts/OA/Office.seq2bert_test"  # 会生成 .npy 和 .map.tsv
+INPUT_SEQ2LLM_TSV   = "../dataset/office-arts/OA/Arts.seq2summary_test.tsv"
+OUTPUT_BASENAME     = "../dataset/office-arts/OA/Arts.seq2bert_test"  # 会生成 .npy 和 .map.tsv
 
 # 要去掉的前缀（忽略大小写；只在句首才去）
 PREFIX_PAT = re.compile(r"^\s*the user\s*", re.IGNORECASE)

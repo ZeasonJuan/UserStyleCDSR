@@ -5,10 +5,10 @@ from logging import getLogger
 from recbole.config import Config
 from recbole.data.dataloader import TrainDataLoader
 from recbole.utils import init_seed, init_logger
-from FLtrainer.fedtrainer_ldp import FedtrainTrainer
+from FLtrainer.fedtrainer_noCDR import FedtrainTrainer
+from trainer import VQRecTrainer
 from model.vqrec import VQRec
 from data.dataset import FederatedDataset
-from trainer import VQRecTrainer
 import os
 import faiss
 # import numpy as np
@@ -139,7 +139,6 @@ def pretrain(dataset, **kwargs):
     _, _, test_data_A = data_preparation(config_A, dataset)
     dataset = FederatedDataset(config_B, pq_codes=None)
     _, _, test_data_B = data_preparation(config_B, dataset)
-
     fed_trainer.fedtrain(pretrain_data_A, pretrain_data_B, test_data_A, test_data_B, weight, show_progress=True)
     return config['model'], config['dataset']
 

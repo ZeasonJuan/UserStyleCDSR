@@ -23,7 +23,7 @@ def parse_args():
 
     # PQ
     # 😊
-    parser.add_argument("--subvector_num", type=int, default=48, help='16/24/32/48/64/96')
+    parser.add_argument("--subvector_num", type=int, default=32, help='16/24/32/48/64/96')
     parser.add_argument("--n_centroid", type=int, default=8)
     parser.add_argument("--use_gpu", type=int, default=False)
     parser.add_argument("--strict", type=int, default=True)

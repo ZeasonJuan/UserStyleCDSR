@@ -9,9 +9,10 @@ initializer_range: 0.02
 regularization_loss_weight: 1
 regularization_loss_weight_user: 1
 loss_type: 'CE'
-summary_mode: "USIDOnly" #LLMEasy, Mean, LLM, Empty, withoutSID, USIDOnly
+summary_mode: "LLMEasy" #😁 LLMEasy, Mean, LLM, Empty, withoutSID, USIDOnly 
 #如果要换数据集（不同的两个域），要改code_dim和index_suffix
 code_dim: 48 #oa48， op32😁
+user_code_dim: 16 #oa48， op32😁
 code_cap: 256
 hidden_size: 300
 temperature: 0.07
@@ -20,7 +21,10 @@ train_stage: inductive_ft # pretrain / inductiZve_ft
 index_path: dataset/downstream
 index_pretrain_dataset: ~
 # index_suffix: OPQ32,IVF1,PQ32x8.strict.index #oa48 op32😁
-index_suffix: OPQ48,IVF1,PQ48x8.strict.index 
+index_suffix: OPQ48,IVF1,PQ48x8.strict.index #oa48 op32😁
+# user_index_suffix: OPQ48,IVF1,PQ48x8.strict.index #oa48 op32😁
+# user_index_suffix: OPQ32,IVF1,PQ32x8.strict.index #oa48 op32😁
+user_index_suffix: OPQ16,IVF1,PQ16x8.strict.index #oa48 op32😁
 
 plm_suffix: feat1CLS
 plm_size: 768
