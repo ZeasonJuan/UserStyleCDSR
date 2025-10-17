@@ -101,6 +101,7 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
     # model_A.private_codes = model_A.private_codes.to(config['device'])
     if pretrained_file != '':
         checkpoint = torch.load(pretrained_file)
+        # logger.info(checkpoint['state_dict']['LayerNorm.weight'])
         logger.info(f'Loading from {pretrained_file}')
         logger.info(f'Transfer [{checkpoint["config"]["dataset"]}] -> [{dataset}]')
         model_A.load_state_dict(checkpoint['state_dict'], strict=False)
@@ -118,10 +119,13 @@ def finetune(model_name, dataset, pretrained_file='', finetune_mode='', **kwargs
             for _ in model_A.attn_layer.parameters():
                 _.requires_grad = False
     logger.info(model_A)
+    # logger.info(model_A.state_dict()['LayerNorm.weight'])
     trainer = VQRecTrainer(config_A, model_A)
     best_valid_score, best_valid_result = trainer.fit(pretrain_data_A, valid_data, show_progress=True)
     # best_valid_result = trainer.evaluate(valid_data, load_best_model=False, show_progress=True)
+    # trainer.saved_model_file = pretrained_file
     test_result = trainer.evaluate(test_data, load_best_model=True, show_progress=True)
+    # test_result = trainer.evaluate(test_data, load_best_model=True, show_progress=True, model_file=pretrained_file)
 
     logger.info(set_color('best valid ', 'yellow') + f': {best_valid_result}')
 
@@ -145,7 +149,9 @@ if __name__ == '__main__':
     # parser.add_argument('-p', type=str, default='save_OP/VQRec-O-10-2025-06-29-e0.3-nb8.pth', help='pre-trained model path')
     # OA 
     # parser.add_argument('-p', type=str, default='save_OA/VQRec-A-10-2025-07-10.pth', help='pre-trained model path')
-    parser.add_argument('-p', type=str, default='save_OA/VQRec-O-10-2025-09-25.pth', help='pre-trained model path')
+    # parser.add_argument('-p', type=str, default='save_OA/VQRec-O-10-2025-09-25.pth', help='pre-trained model path')
+    parser.add_argument('-p', type=str, default=f'save_OA/VQRec-A-10-2025-10-13.pth', help='pre-trained model path')
+    # parser.add_argument('-p', type=str, default=f'save_OA/VQRec-O-10-2025-10-16.pth', help='pre-trained model path')
     parser.add_argument('-f', type=str, default='', help='fine-tune mode')
     args, unparsed = parser.parse_known_args()
     print(args)

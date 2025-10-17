@@ -6,10 +6,10 @@ from recbole.config import Config
 from recbole.data.dataloader import TrainDataLoader
 from recbole.utils import init_seed, init_logger
 from FLtrainer.fedtrainer_ldp_kd_upq import FedtrainTrainer
-from model.vqrec import VQRec
-from model.vqrecKD import VQRecKD
+from recbole.data import data_preparation
+from trainer import VQRecTrainer
 from model.vqrecKDUPQ import VQRecKDUPQ
-from data.dataset import FederatedPlusDataset
+from data.dataset import FederatedDataset, FederatedPlusDataset
 from utils import Seq2BertBank
 import os
 import faiss
@@ -35,10 +35,12 @@ def load_text_emb(config):
 
 #user的不需要pad
 def load_index_user(config, logger, user_num, field2id_token_user):
-    code_dim = config['code_dim']
+    # code_dim = config['code_dim']
+    user_code_dim = config['user_code_dim']
     code_cap = config['code_cap']
     dataset_name = config['dataset']
     index_suffix = config['index_suffix']
+    user_index_suffix = config['user_index_suffix']
     if config['index_pretrain_dataset'] is not None:
         index_dataset = config['index_pretrain_dataset']
     else:
@@ -54,21 +56,21 @@ def load_index_user(config, logger, user_num, field2id_token_user):
         index_path = os.path.join(
             config['index_path'],
             index_dataset,
-            f'{index_dataset}_user_LLMEasy.{index_suffix}' # 暂时的，后续需要进行修改！标注一下😁，需要把LLMEasy替换成{summary_mode}
+            f'{index_dataset}_user_LLMEasy.{user_index_suffix}' # 暂时的，后续需要进行修改！标注一下😁，需要把LLMEasy替换成{summary_mode}
         )
     elif summary_mode == "Empty":
         return None, None
     logger.info(f'Index path: {index_path}')
     uni_index = faiss.read_index(index_path)
     pq_codes_user, centroid_embeds, coarse_embeds, opq_transform = parse_faiss_index(uni_index)
-    assert code_dim == pq_codes_user.shape[1], pq_codes_user.shape
+    assert user_code_dim == pq_codes_user.shape[1], pq_codes_user.shape
     # assert user_num == 1 + pq_codes.shape[0], f'{user_num}, {pq_codes.shape}'
     # uint8 -> int32 to reserve 0 padding
     pq_codes_user = pq_codes_user.astype(np.int32)
     
     # flatten pq codes
     base_id = 0
-    for i in range(code_dim):
+    for i in range(user_code_dim):
         pq_codes_user[:, i] += base_id
         base_id += code_cap
 
@@ -83,7 +85,7 @@ def load_index_user(config, logger, user_num, field2id_token_user):
             filter_id_dct[filter_id_name] = idx
 
     logger.info('Converting indexes.')
-    mapped_codes = np.zeros((user_num, code_dim), dtype=np.int32)
+    mapped_codes = np.zeros((user_num, user_code_dim), dtype=np.int32)
     #item情况下，mapped_codes[0]是padding的0, user情况下，mapped_codes[0]是0-0对应的pq_code
     for i, token in enumerate(field2id_token_user):
         mapped_codes[i] = pq_codes_user[filter_id_dct[token]]
@@ -228,29 +230,31 @@ def pretrain(dataset, regularization_loss_weight_A, regularization_loss_weight_B
     global_embedding = nn.Embedding(
         config['code_dim'] * (1 + config['code_cap']), config['hidden_size'], padding_idx=0).to(config['device'])
     global_embedding.weight.data.normal_(mean=0.0, std=config['initializer_range'])
-
     global_embedding_user = nn.Embedding(
         config['code_dim'] * (config['code_cap']), config['hidden_size']).to(config['device'])
     global_embedding_user.weight.data.normal_(mean=0.0, std=config['initializer_range'])
 
-    model_A.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
-    model_B.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
+    # model_A.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
+    # model_B.pq_code_embedding_share.load_state_dict(global_embedding.state_dict())
     model_A.pq_code_embedding_specific.load_state_dict(global_embedding.state_dict())
     model_B.pq_code_embedding_specific.load_state_dict(global_embedding.state_dict())
 
-    model_A.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
-    model_B.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
+    # model_A.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
+    # model_B.pq_code_user_embedding_share.load_state_dict(global_embedding_user.state_dict())
     model_A.pq_code_user_embedding_specific.load_state_dict(global_embedding_user.state_dict())
     model_B.pq_code_user_embedding_specific.load_state_dict(global_embedding_user.state_dict())
     weight = []
     weight.append(dataset_A.file_size_list[0]/(dataset_A.file_size_list[0] + dataset_B.file_size_list[0]))
     weight.append(dataset_B.file_size_list[0]/(dataset_A.file_size_list[0] + dataset_B.file_size_list[0]))
     weight = torch.tensor(weight).to(config['device'])
-    trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding, global_embedding_user)
-    trainer.fedtrain(pretrain_data_A, pretrain_data_B, weight, show_progress=True)
-    # if config['summary_mode'] == "LLMEasy" or config['summary_mode'] == "LLM":
-    #     model_A.seq2bert.save_to_pickle()
-    #     model_B.seq2bert.save_to_pickle()
+    fed_trainer = FedtrainTrainer(config_A, config_B, model_A, model_B, global_embedding, global_embedding_user)
+
+    dataset = FederatedDataset(config_A, pq_codes=None)
+    _, _, test_data_A = data_preparation(config_A, dataset)
+    dataset = FederatedDataset(config_B, pq_codes=None)
+    _, _, test_data_B = data_preparation(config_B, dataset)
+
+    fed_trainer.fedtrain(pretrain_data_A, pretrain_data_B, test_data_A, test_data_B, weight, show_progress=True)
     return config['model'], config['dataset']
 
 

@@ -103,8 +103,8 @@ async def one_call(seq_items, idx, sem):
     }
 
 
-INPUT_SEQ2TEXT_TSV = "../dataset/or-pantry/OP/Pantry.seq2text_valid.tsv"       # 你的 (item_newid_seq -> items_text) 输入文件
-OUTPUT_SEQ2LLM_TSV = "../dataset/or-pantry/OP/Pantry.seq2summary_valid.tsv"    # 产出的 (item_newid_seq -> llm_summary) 文件
+INPUT_SEQ2TEXT_TSV = "../dataset/office-arts/OA/Office.seq2text_train.tsv"       # 你的 (item_newid_seq -> items_text) 输入文件
+OUTPUT_SEQ2LLM_TSV = "../dataset/office-arts/OA/Office.seq2summary_train.tsv"    # 产出的 (item_newid_seq -> llm_summary) 文件
 # ====== 小工具：读取 seq2text TSV ======
 def load_seq2text_tsv(path):
     """

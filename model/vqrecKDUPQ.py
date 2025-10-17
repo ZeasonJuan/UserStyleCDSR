@@ -32,7 +32,6 @@ def gumbel_sinkhorn(r, n_iters=8, temperature=0.7):
 
 import os
 import numpy as np
-import matplotlib.pyplot as plt
 
 def plot_code_distribution(codes, code_cap=256, outdir="./figs", title_prefix="PQ codes"):
     """
@@ -163,15 +162,15 @@ class VQRecKDUPQ(SequentialRecommender):
         self.loss_type = config['loss_type']
 
         # define layers and loss
-        self.pq_code_embedding_share = nn.Embedding(
-            self.code_dim * (1 + self.code_cap), self.hidden_size, padding_idx=0)  # 加1是留给pad的
+        # self.pq_code_embedding_share = nn.Embedding(
+        #     self.code_dim * (1 + self.code_cap), self.hidden_size, padding_idx=0)  # 加1是留给pad的
         self.pq_code_embedding_specific = nn.Embedding(
             self.code_dim * (1 + self.code_cap), self.hidden_size, padding_idx=0)
         self.reassigned_code_embedding = None
 
         #新加部分
-        self.pq_code_user_embedding_share = nn.Embedding(
-            self.code_dim * (self.code_cap), self.hidden_size)
+        # self.pq_code_user_embedding_share = nn.Embedding(
+        #     self.code_dim * (self.code_cap), self.hidden_size)
         self.pq_code_user_embedding_specific = nn.Embedding(
             self.code_dim * (self.code_cap), self.hidden_size)
         if self.summary_mode == "withoutSID":
